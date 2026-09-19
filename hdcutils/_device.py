@@ -1,20 +1,43 @@
 # -*- coding: utf-8 -*-
-"""Device API, modeled after ``adbutils.AdbDevice``.
+"""Device API, named after the **official hdc / OpenHarmony tool commands**.
 
-All operations talk to the hdc server over plain sockets -- **no hdc.exe
-involved** (its binary version and install location do not matter):
+Every public method maps onto a documented command, grouped the way the
+official reference groups them
+([hdc tool](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/dfx/hdc.md),
+[aa](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/tools/aa-tool.md),
+[bm](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/tools/bm-tool.md),
+[param](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/tools/param-tool.md),
+[uitest](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/application-test/uitest-guidelines.md)):
 
-* shell / interactive shell / streaming logs -- daemon-side commands, end on EOF;
-* file send/recv and app install/uninstall -- the wire-level file/app task
-  protocol (``_task.py``, verified against the open-source hdc sources);
-* input / screenshot / power -- plain shell commands (``uitest uiInput``,
-  ``snapshot_display``, ``power-shell``), the same approach adbutils uses with
-  ``input``/``am``/``pm``. This is low-level input injection only; there is no
-  UI automation layer (no element selectors, no device-side test agent).
+======================  =========================================================
+Section                 Official command
+======================  =========================================================
+Device connection       ``hdc list targets`` / ``hdc wait`` / ``hdc tconn`` /
+                        ``hdc tmode``
+Shell                   ``hdc shell``
+File transfer           ``hdc file send`` / ``hdc file recv``
+App management          ``hdc install`` / ``hdc uninstall`` /
+                        ``aa start`` / ``aa force-stop`` / ``bm clean`` /
+                        ``bm dump``
+Port forwarding         ``hdc fport`` / ``hdc rport`` / ``hdc fport ls`` /
+                        ``hdc fport rm``
+Service process         ``hdc start`` / ``hdc kill`` / ``hdc checkserver``
+Device operations       ``hdc hilog`` / ``hdc jpid`` / ``hdc track-jpid`` /
+                        ``hdc target boot`` / ``hdc bugreport``
+System parameters       ``param get`` / ``param ls`` / ``param set`` /
+                        ``param wait`` / ``param save``
+UI input                ``uitest uiInput click|doubleClick|longClick|fling|
+                        swipe|drag|dircFling|inputText|text|keyEvent``
+Screen & power          ``snapshot_display`` / ``uitest screenCap`` /
+                        ``power-shell`` / ``hidumper``
+======================  =========================================================
 
-Not implemented (by design): app sandbox (-b bundlename), lz4 compression (-z),
-and the binary directory-mode protocol; directory transfers are composed from
-single-file transfers plus ``mkdir`` in ``send_dir``/``pull_dir``.
+There is no hdc.exe dependency in any of these calls: the command text goes
+straight to the hdc server over a socket (one short connection per command).
+
+Not implemented (by design): app sandbox (-b bundlename), lz4 compression
+(-z) and the binary directory-mode protocol; directory transfers are composed
+from single-file transfers in :meth:`send_dir` / :meth:`pull_dir`.
 """
 from __future__ import annotations
 
@@ -36,14 +59,22 @@ from .exceptions import HdcCommandError, HdcError
 if TYPE_CHECKING:  # pragma: no cover
     from .core import HdcClient
 
-__all__ = ["HdcDevice", "DeviceInfo", "KeyCode", "WindowSize", "AppCurrentInfo", "Prop"]
+__all__ = [
+    "HdcDevice",
+    "DeviceInfo",
+    "KeyCode",
+    "WindowSize",
+    "AppCurrentInfo",
+    "SyncSession",
+    "ForwardedSocket",
+]
 
 
 class KeyCode:
-    """Common OpenHarmony key codes (foundation/multimodalinput KeyCodes).
+    """OpenHarmony key codes for ``uitest uiInput keyEvent``.
 
-    Only frequent keys are listed; pass raw ints for anything else. The
-    ``uitest uiInput keyEvent`` command also accepts names such as ``"Back"``.
+    Values come from ``@ohos.multimodalInput.keyCode``; the command also
+    accepts the documented names (``"Back"``, ``"Home"`` ...).
     """
 
     HOME = 1
@@ -55,36 +86,30 @@ class KeyCode:
 
 
 class WindowSize(NamedTuple):
-    """Screen size in pixels (adbutils-compatible named tuple)."""
+    """Screen size in pixels."""
 
     width: int
     height: int
 
 
 class AppCurrentInfo(NamedTuple):
-    """Foreground app info (adbutils-compatible fields)."""
+    """Foreground app info (from ``hidumper -s AbilityManagerService``)."""
 
-    package: str
-    activity: str
+    bundle_name: str
+    ability_name: str
 
+    @property
+    def package(self) -> str:
+        """Alias kept for callers used to the Android naming."""
+        return self.bundle_name
 
-class Prop:
-    """adbutils-style property accessor: ``d.prop.get("name")`` / ``d.prop["name"]``."""
-
-    def __init__(self, device: "HdcDevice"):
-        self._device = device
-
-    def get(self, name: str, timeout: float = 15.0) -> str:
-        return self._device.get_prop(name, timeout=timeout)
-
-    __call__ = get
-
-    def __getitem__(self, name: str) -> str:
-        return self.get(name)
+    @property
+    def activity(self) -> str:
+        return self.ability_name
 
 
 class DeviceInfo:
-    """Basic device facts from ``param get`` system parameters."""
+    """Device facts read through ``param get`` (system parameters)."""
 
     __slots__ = ("serial", "model", "brand", "manufacturer", "product",
                  "software_version", "os_version", "api_version", "props")
@@ -105,22 +130,25 @@ class DeviceInfo:
             self.serial, self.model, self.os_version, self.api_version)
 
 
-class HdcSync:
-    """adbutils-style ``d.sync`` namespace (one short connection per call)."""
+class SyncSession:
+    """File-transfer session (``hdc file send`` / ``hdc file recv``).
+
+    One short connection per call; reach it through :attr:`HdcDevice.sync`.
+    """
 
     def __init__(self, device: "HdcDevice"):
         self._device = device
 
     def push(self, src: str, dst: str, timeout: float = 300.0) -> str:
-        """Push a local file to the device."""
+        """``hdc file send <src> <dst>`` (local -> device)."""
         return self._device.send_file(src, dst, timeout=timeout)
 
     def pull(self, rpath: str, lpath: str, timeout: float = 300.0) -> str:
-        """Pull a device file to the local machine."""
+        """``hdc file recv <rpath> <lpath>`` (device -> local)."""
         return self._device.recv_file(rpath, lpath, timeout=timeout)
 
     def read_bytes(self, rpath: str, timeout: float = 60.0) -> bytes:
-        """Read a device file into memory (base64 over socket; small files)."""
+        """Read a device file into memory (base64 over a shell connection)."""
         return self._device.read_file(rpath, timeout=timeout)
 
     def read_text(self, rpath: str, timeout: float = 60.0,
@@ -136,63 +164,35 @@ class HdcSync:
         self.write_bytes(rpath, text.encode(encoding), timeout=timeout)
 
     def iter_content(self, rpath: str, timeout: Optional[float] = None) -> Iterator[bytes]:
-        """Stream device file content via ``cat`` (one short-lived connection)."""
+        """Stream a device file with ``cat`` (one short-lived connection)."""
         return self._device.stream_shell("cat %s" % rpath, timeout=timeout)
 
 
 class HdcDevice:
-    """A single HarmonyOS device. Obtain instances via :meth:`HdcClient.device`."""
+    """A single HarmonyOS device.
+
+    Obtain instances through :meth:`HdcClient.device`. Methods are grouped and
+    named after the official hdc tool commands (see the module docstring).
+    """
 
     def __init__(self, client: "HdcClient", serial: str):
         self.client = client
         self.serial = serial
-        self.prop = Prop(self)
 
     def __repr__(self) -> str:
         return "HdcDevice(serial=%r)" % self.serial
 
-    # ------------------------------------------------------------------
-    # Sync namespace (adbutils parity)
-    # ------------------------------------------------------------------
-    @property
-    def sync(self) -> HdcSync:
-        """File-transfer namespace mirroring ``adbutils.AdbDevice.sync``."""
-        return HdcSync(self)
-
-    # ------------------------------------------------------------------
-    # Internal execution
-    # ------------------------------------------------------------------
-    def _execute(self, command: str, completion: Optional[str] = None,
-                 check_fail: bool = True, timeout: Optional[float] = None,
-                 idle_window: float = DEFAULT_IDLE_WINDOW) -> bytes:
-        return self.client._execute(
-            command, serial=self.serial, completion=completion,
-            check_fail=check_fail, timeout=timeout, idle_window=idle_window,
-        )
-
-    def _file_task(self) -> FileTask:
-        self.client._ensure()
-        return FileTask(self.client.host, self.client.port,
-                        connect_timeout=self.client.connect_timeout,
-                        connect_key=self.serial)
-
-    def _app_task(self) -> AppTask:
-        self.client._ensure()
-        return AppTask(self.client.host, self.client.port,
-                       connect_timeout=self.client.connect_timeout,
-                       connect_key=self.serial)
-
-    # ------------------------------------------------------------------
-    # shell (adbutils: shell / shell2 / open_shell / stream)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Shell -- `hdc shell`
+    # ==================================================================
     def shell(self, cmd, stream: bool = False, timeout: Optional[float] = None,
               encoding: str = "utf-8"):
-        """Run a command on the device, returning merged stdout/stderr text.
+        """``hdc shell <cmd>``: run a command on the device.
 
         ``cmd`` accepts a str or a list (joined with spaces; pass a str when
-        quoting is needed). hdc does not propagate exit codes -- use
-        :meth:`shell2` when the return code matters. With ``stream=True``
-        returns a generator of raw output chunks instead (explicit long
+        quoting matters). hdc does not propagate exit codes -- use
+        :meth:`shell2` when the return code matters. With ``stream=True`` a
+        generator of raw output chunks is returned instead (explicit long
         connection; close it when done).
         """
         if isinstance(cmd, (list, tuple)):
@@ -206,7 +206,7 @@ class HdcDevice:
             encoding, "replace").rstrip("\r\n")
 
     def shell_bytes(self, cmd, timeout: Optional[float] = None) -> bytes:
-        """Same as :meth:`shell`, returning raw bytes."""
+        """``hdc shell <cmd>``, returning raw bytes."""
         if isinstance(cmd, (list, tuple)):
             cmd = " ".join(str(c) for c in cmd)
         cmd = str(cmd)
@@ -216,10 +216,10 @@ class HdcDevice:
                              check_fail=False, timeout=timeout)
 
     def shell2(self, cmd, timeout: Optional[float] = None) -> Tuple[str, int]:
-        """Run a command, returning ``(output, returncode)``.
+        """``hdc shell`` plus a return code: ``(output, returncode)``.
 
-        hdc does not report exit codes; this appends ``; echo __RC__$?`` to the
-        command, which works for virtually all commands.
+        hdc does not report exit codes, so ``; echo __RC__$?`` is appended;
+        this works for virtually all commands.
         """
         if isinstance(cmd, (list, tuple)):
             cmd = " ".join(str(c) for c in cmd)
@@ -230,7 +230,9 @@ class HdcDevice:
         return text, -1
 
     def open_shell(self, initial: Optional[str] = None) -> "ShellSession":
-        """Open an interactive shell session (long connection; ``close()`` after use).
+        """``hdc shell`` with no command: interactive device terminal.
+
+        This is an explicit long connection; close it when done.
 
         Usage::
 
@@ -246,7 +248,7 @@ class HdcDevice:
         return session
 
     def stream_shell(self, cmd, timeout: Optional[float] = None) -> Iterator[bytes]:
-        """Run a command and yield raw output chunks while it runs."""
+        """``hdc shell`` with streaming output (raw chunks)."""
         if isinstance(cmd, (list, tuple)):
             cmd = " ".join(str(c) for c in cmd)
         return self.client.stream_command("shell " + str(cmd), serial=self.serial,
@@ -254,7 +256,7 @@ class HdcDevice:
 
     def stream_lines(self, cmd, timeout: Optional[float] = None,
                      encoding: str = "utf-8") -> Iterator[str]:
-        """Run a command and yield output line by line."""
+        """``hdc shell`` with streaming output, line by line."""
         buf = b""
         for chunk in self.stream_shell(cmd, timeout=timeout):
             buf += chunk
@@ -264,8 +266,12 @@ class HdcDevice:
         if buf.strip():
             yield buf.rstrip(b"\r").decode(encoding, "replace")
 
+    # ==================================================================
+    # Device operations -- `hdc hilog` / `hdc jpid` / `hdc track-jpid` /
+    # `hdc target boot` / `hdc bugreport`
+    # ==================================================================
     def hilog(self, *args, timeout: Optional[float] = None) -> Iterator[str]:
-        """Stream device logs (native ``hdc hilog``).
+        """``hdc hilog [-h]``: stream device logs line by line.
 
         Explicit long connection: break out of the generator or pass a
         timeout, and close it between capture sessions to save power.
@@ -280,31 +286,88 @@ class HdcDevice:
         if buf.strip():
             yield buf.rstrip(b"\r").decode("utf-8", "replace")
 
-    def logcat(self, *args, timeout: Optional[float] = None) -> Iterator[str]:
-        """adbutils-compatible alias of :meth:`hilog`."""
-        yield from self.hilog(*args, timeout=timeout)
+    def jpid(self, timeout: float = 15.0) -> str:
+        """``hdc jpid``: pids of apps with open abilities."""
+        return self._execute("jpid", check_fail=False, timeout=timeout).decode(
+            "utf-8", "replace").strip()
 
-    # ------------------------------------------------------------------
-    # Files (pure socket file-task protocol; adbutils sync parity)
-    # ------------------------------------------------------------------
+    def track_jpid(self, *args, timeout: Optional[float] = None) -> Iterator[str]:
+        """``hdc track-jpid [-a|-p]``: stream app pid/bundle changes.
+
+        Explicit long connection: break out of the generator or pass a timeout.
+        """
+        command = "track-jpid" + (" " + " ".join(args) if args else "")
+        buf = b""
+        for chunk in self.client.stream_command(command, serial=self.serial,
+                                               timeout=timeout):
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                yield line.rstrip(b"\r").decode("utf-8", "replace")
+        if buf.strip():
+            yield buf.rstrip(b"\r").decode("utf-8", "replace")
+
+    def target_boot(self, mode: Optional[str] = None, timeout: float = 15.0) -> None:
+        """``hdc target boot [-bootloader|-recovery]``: reboot the device.
+
+        ``mode`` may be ``bootloader`` / ``recovery`` or any argument
+        accepted by ``/bin/begetctl reboot``. A bare ``reboot`` is rejected
+        by the real server (``Unknown operation command``), which is why the
+        official name is used here.
+        """
+        command = "target boot" + (" %s" % mode if mode else "")
+        self._execute(command, check_fail=False, timeout=timeout)
+
+    def bugreport(self, path: Optional[str] = None, timeout: float = 600.0) -> str:
+        """``hdc bugreport [FILE]``: export system information.
+
+        ``path`` is a local file; when omitted the report is returned as text.
+        """
+        if path:
+            local = os.path.abspath(path)
+            parent = os.path.dirname(local)
+            command = "bugreport %s" % local.replace("\\", "/")
+            out = self._execute(command, check_fail=False, timeout=timeout)
+            text = out.decode("utf-8", "replace").strip()
+            if not os.path.isfile(local) and text:
+                # some builds stream the report back instead of writing locally
+                with open(local, "w", encoding="utf-8") as f:
+                    f.write(text)
+            _ = parent
+            return local
+        return self._execute("bugreport", check_fail=False, timeout=timeout).decode(
+            "utf-8", "replace").strip()
+
+    # ==================================================================
+    # File transfer -- `hdc file send` / `hdc file recv`
+    # ==================================================================
+    @property
+    def sync(self) -> SyncSession:
+        """File-transfer namespace (``hdc file send`` / ``hdc file recv``)."""
+        return SyncSession(self)
+
     def send_file(self, local: str, remote: str, timeout: float = 300.0,
                   hold_timestamp: bool = False, update_if_new: bool = False) -> str:
-        """Push a local file to the device (``hdc file send`` protocol)."""
+        """``hdc file send [-a|-sync] SOURCE DEST``.
+
+        ``hold_timestamp`` is the ``-a`` flag, ``update_if_new`` the ``-sync``
+        flag. The transfer uses the wire-level file-task protocol over a
+        socket (no hdc.exe).
+        """
         return self._file_task().send_file(
             local, remote, timeout=timeout,
             hold_timestamp=hold_timestamp, update_if_new=update_if_new)
 
     def recv_file(self, remote: str, local: str, timeout: float = 300.0) -> str:
-        """Pull a device file to the local machine (``hdc file recv`` protocol)."""
+        """``hdc file recv DEST SOURCE`` (device -> local)."""
         return self._file_task().recv_file(remote, local, timeout=timeout)
 
-    push = send_file
-    pull = recv_file
-
     def send_dir(self, local_dir: str, remote_dir: str, timeout: float = 600.0) -> int:
-        """Push a directory recursively (single-file sends + ``mkdir``;
-        the binary directory-mode protocol is intentionally not used).
-        Returns the number of files transferred."""
+        """Push a directory recursively (single-file sends + ``mkdir``).
+
+        The binary directory-mode protocol is intentionally not used. Returns
+        the number of files transferred.
+        """
         if not os.path.isdir(local_dir):
             raise HdcError("local directory not found: %s" % local_dir)
         count = 0
@@ -324,7 +387,7 @@ class HdcDevice:
         return count
 
     def pull_dir(self, remote_dir: str, local_dir: str, timeout: float = 600.0) -> int:
-        """Pull a device directory recursively (file by file via ``find``)."""
+        """Pull a directory recursively (file by file)."""
         listing = self.shell("find %s -type f" % remote_dir, timeout=60)
         files = [line.strip() for line in listing.split("\n") if line.strip()]
         if not files:
@@ -340,7 +403,7 @@ class HdcDevice:
         return count
 
     def read_file(self, remote: str, timeout: float = 60.0) -> bytes:
-        """Read a device file into memory (base64 over socket; small files)."""
+        """Read a device file into memory (base64 over a shell connection)."""
         out = self.shell_bytes("base64 %s" % remote, timeout=timeout).decode(
             "ascii", "replace")
         text = "".join(out.split())
@@ -359,36 +422,62 @@ class HdcDevice:
         if level == "fail":
             raise HdcCommandError(message, output=out)
 
-    # ------------------------------------------------------------------
-    # Apps (pure socket app-task protocol)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # App management -- `hdc install` / `hdc uninstall` / `aa` / `bm`
+    # ==================================================================
     def install(self, path: str, *args: str, timeout: float = 600.0) -> str:
-        """Install a .hap/.hsp/.app package (``hdc install [-r] <path>``).
+        """``hdc install [-r|-s|-w|-u|-p|-g] src``.
 
-        Extra args pass through, e.g. ``d.install("app.hap", "-r", "-g")``.
+        Extra arguments pass straight through to the daemon's ``bm install``,
+        e.g. ``d.install("app.hap", "-r", "-g")``.
         """
         opts = " ".join(a for a in args if a) if args else "-r"
         return self._app_task().install(path, options=opts, timeout=timeout)
 
     def uninstall(self, bundle_name: str, keep_data: bool = False,
                   timeout: float = 300.0) -> str:
-        """Uninstall an app (``hdc uninstall [-k] <bundle>``)."""
+        """``hdc uninstall [-n|-k|-s] bundlename``.
+
+        ``keep_data=True`` passes ``-k`` (keep the application data).
+        """
         result = self._app_task().uninstall(bundle_name, keep_data=keep_data,
                                             timeout=timeout)
         if "[Fail]" in result or result.startswith("FAIL"):
             raise HdcCommandError(result, output=result)
         return result
 
+    def bm_dump(self, bundle_name: Optional[str] = None, *args: str,
+                timeout: float = 30.0) -> str:
+        """``bm dump``: bundle manager dump.
+
+        With ``bundle_name`` this is ``bm dump -n <bundle>``; without it the
+        full dump (``-a`` for the app list) is returned.
+        """
+        parts = ["bm", "dump"]
+        if bundle_name:
+            parts += ["-n", bundle_name]
+        parts += [str(a) for a in args]
+        return self.shell(parts, timeout=timeout)
+
+    def bm_clean(self, bundle_name: str, *args: str, timeout: float = 60.0) -> None:
+        """``bm clean -n <bundle> -d``: clear app data (``-d`` for data, ``-c`` for cache)."""
+        parts = ["bm", "clean", "-n", bundle_name]
+        parts += [str(a) for a in args] or ["-d"]
+        self.shell(parts, timeout=timeout)
+
+    def bm_get(self, *args: str, timeout: float = 30.0) -> str:
+        """``bm get --udid``: device udid (and other ``bm get`` variants)."""
+        parts = ["bm", "get"] + ([str(a) for a in args] or ["--udid"])
+        return self.shell(parts, timeout=timeout)
+
     def list_apps(self, timeout: float = 30.0) -> List[str]:
-        """List installed app bundle names (``bm dump -a``)."""
+        """``bm dump -a``: bundle names of installed apps."""
         out = self.shell("bm dump -a", timeout=timeout)
         apps = [line.strip() for line in out.replace("\r\n", "\n").split("\n")]
         return [a for a in apps if a and " " not in a and not a.startswith("[")]
 
-    list_packages = list_apps
-
     def app_info(self, bundle_name: str, timeout: float = 30.0):
-        """App details (``bm dump -n <bundle>``); dict when parseable JSON."""
+        """``bm dump -n <bundle>``: app details (dict when parseable JSON)."""
         out = self.shell("bm dump -n %s" % bundle_name, timeout=timeout)
         if not out or "Fail" in out.split("\n")[0]:
             raise HdcCommandError("app %s not found" % bundle_name, output=out)
@@ -401,16 +490,16 @@ class HdcDevice:
         return out
 
     def app_version(self, bundle_name: str, timeout: float = 30.0) -> str:
-        """Get the app versionName."""
+        """``bm dump -n <bundle>`` -> ``versionName``."""
         info = self.app_info(bundle_name, timeout=timeout)
         if isinstance(info, dict):
             return str(info.get("versionName", "") or "")
         match = re.search(r'"versionName"\s*:\s*"([^"]+)"', info)
         return match.group(1) if match else ""
 
-    def app_start(self, bundle_name: str, ability: Optional[str] = None,
-                  url: Optional[str] = None, timeout: float = 30.0) -> None:
-        """Start an app (``aa start -b <bundle> [-a <ability>] [-U <url>]``)."""
+    def aa_start(self, bundle_name: str, ability: Optional[str] = None,
+                 url: Optional[str] = None, timeout: float = 30.0) -> None:
+        """``aa start -b <bundle> [-a <ability>] [-U <url>]``."""
         args = ["aa", "start", "-b", bundle_name]
         if ability:
             args += ["-a", ability]
@@ -421,24 +510,17 @@ class HdcDevice:
         if level == "fail" or re.search(r"[Ee]rror|fail", out):
             raise HdcCommandError(message or out, output=out)
 
-    def open_browser(self, url: str, timeout: float = 30.0) -> None:
-        """Open a URL through the system route (``aa start -U <url>``)."""
-        out = self.shell(["aa", "start", "-U", url], timeout=timeout)
-        if re.search(r"[Ee]rror|[Ff]ail", out):
-            raise HdcCommandError(out, output=out)
-
-    open_url = open_browser
-
-    def app_stop(self, bundle_name: str, timeout: float = 30.0) -> None:
-        """Stop an app (``aa force-stop <bundle>``)."""
+    def aa_force_stop(self, bundle_name: str, timeout: float = 30.0) -> None:
+        """``aa force-stop <bundle>``: force-stop an app."""
         self.shell(["aa", "force-stop", bundle_name], timeout=timeout)
 
-    def app_clear(self, bundle_name: str, timeout: float = 60.0) -> None:
-        """Clear app data (``bm clean -n <bundle> -d``)."""
-        self.shell(["bm", "clean", "-n", bundle_name, "-d"], timeout=timeout)
+    def aa_dump(self, *args: str, timeout: float = 30.0) -> str:
+        """``aa dump`` (deprecated in the official docs; kept for completeness)."""
+        parts = ["aa", "dump"] + [str(a) for a in args]
+        return self.shell(parts, timeout=timeout)
 
     def app_current(self, timeout: float = 15.0) -> AppCurrentInfo:
-        """Get the foreground app (``hidumper -s AbilityManagerService``)."""
+        """Foreground app, from ``hidumper -s AbilityManagerService``."""
         out = self.shell(
             ["hidumper", "-s", "AbilityManagerService", "-a", "-a"], timeout=timeout)
         bundle = ""
@@ -458,43 +540,35 @@ class HdcDevice:
                 output=out)
         return AppCurrentInfo(bundle, ability)
 
-    # ------------------------------------------------------------------
-    # Port forwarding (adbutils: forward / reverse)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Port forwarding -- `hdc fport` / `hdc rport`
+    # ==================================================================
     def fport(self, local: str, remote: str, timeout: float = 30.0) -> None:
-        """Add a forward rule (``hdc -t key fport tcp:<lport> tcp:<rport>``)."""
+        """``hdc fport <localnode> <remotenode>``: forward host port -> device port."""
         self._forward_op(["fport", local, remote], timeout)
 
     def rport(self, remote: str, local: str, timeout: float = 30.0) -> None:
-        """Add a reverse rule (``rport tcp:<rport> tcp:<lport>``)."""
+        """``hdc rport <remotenode> <localnode>``: reverse (device -> host)."""
         self._forward_op(["rport", remote, local], timeout)
 
     def fport_list(self, timeout: float = 15.0) -> List[str]:
-        """List forward rules (``fport ls``)."""
+        """``hdc fport ls``: list all forwarding tasks."""
         out = self._execute("fport ls", check_fail=False, timeout=timeout)
         text = out.decode("utf-8", "replace")
         lines = [line.strip() for line in text.replace("\r\n", "\n").split("\n")]
         return [l for l in lines if l and not l.startswith("[") and l.lower() != "(empty)"]
 
     def fport_remove(self, task: str, timeout: float = 15.0) -> None:
-        """Remove one forward rule (``fport rm <rule>``)."""
+        """``hdc fport rm <task>``: remove one forwarding task."""
         out = self._execute("fport rm %s" % task, check_fail=False, timeout=timeout)
         text = out.decode("utf-8", "replace")
         if not re.search(r"Success|success", text):
             raise HdcCommandError(text.strip() or "fport rm failed", output=text)
 
     def fport_remove_all(self, timeout: float = 15.0) -> None:
-        """Remove all forward rules."""
+        """``hdc fport rm`` for every listed task."""
         for rule in self.fport_list(timeout=timeout):
             self.fport_remove(rule, timeout=timeout)
-
-    forward = fport
-    reverse = rport
-    forward_list = fport_list
-
-    def forward_remove(self, task: str, timeout: float = 15.0) -> None:
-        """adbutils-compatible alias of :meth:`fport_remove`."""
-        self.fport_remove(task, timeout=timeout)
 
     def _forward_op(self, args: List[str], timeout: float) -> None:
         out = self._execute(" ".join(str(a) for a in args),
@@ -505,11 +579,11 @@ class HdcDevice:
 
     def create_connection(self, what: str, port=None,
                           timeout: Optional[float] = None) -> "ForwardedSocket":
-        """adbutils-compatible tunnel: a socket connected to a device endpoint.
+        """Set up an ``hdc fport`` rule and return a socket to the device endpoint.
 
-        ``create_connection("tcp", 8010)``          -> local port -> device port
-        ``create_connection("unix", "sockname")``   -> localabstract on device
-        The fport rule is removed automatically when the socket is closed.
+        ``create_connection("tcp", 8010)``        -> local port -> device port
+        ``create_connection("unix", "sockname")`` -> device ``localabstract``
+        The forwarding task is removed automatically when the socket closes.
         """
         if what == "tcp":
             remote = "tcp:%s" % port
@@ -527,16 +601,55 @@ class HdcDevice:
             raise
         return ForwardedSocket(sock, rule, self)
 
-    # ------------------------------------------------------------------
-    # Device info (adbutils: prop / window_size / battery)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # System parameters -- `param get|ls|set|wait|save`
+    # ==================================================================
+    def param_get(self, name: Optional[str] = None, timeout: float = 30.0) -> str:
+        """``param get [name]``: value of one parameter, or all of them."""
+        command = "param get" + (" %s" % name if name else "")
+        return self.shell(command, timeout=timeout)
+
+    def param_ls(self, name: Optional[str] = None, recursive: bool = False,
+                 timeout: float = 30.0) -> List[str]:
+        """``param ls [-r] [name]``: matching parameter lines."""
+        command = "param ls" + (" -r" if recursive else "")
+        if name:
+            command += " %s" % name
+        out = self.shell(command, timeout=timeout)
+        return [line.strip() for line in out.replace("\r\n", "\n").split("\n") if line.strip()]
+
+    def param_set(self, name: str, value, timeout: float = 30.0) -> None:
+        """``param set <name> <value>``."""
+        out = self.shell("param set %s %s" % (name, value), timeout=timeout)
+        level, message = strip_message_prefix(out)
+        if level == "fail":
+            raise HdcCommandError(message, output=out)
+
+    def param_wait(self, name: str, value: Optional[str] = None,
+                   timeout: float = 30.0) -> bool:
+        """``param wait <name> [value] [timeout]``: wait for a value match.
+
+        Returns ``True`` when the parameter matched; ``False`` on timeout
+        (the device prints a fail message in that case).
+        """
+        command = "param wait %s" % name
+        if value is not None:
+            command += " %s" % value
+        command += " %d" % int(timeout)
+        out = self.shell(command, timeout=timeout + 10)
+        return not re.search(r"[Ff]ail|timeout", out)
+
+    def param_save(self, timeout: float = 30.0) -> None:
+        """``param save``: persist ``persist.*`` parameters."""
+        self.shell("param save", timeout=timeout)
+
     def get_prop(self, name: str, timeout: float = 15.0) -> str:
-        """Read a system parameter (``param get <name>``)."""
+        """``param get <name>`` parsed down to the value."""
         out = self.shell("param get %s" % name, timeout=timeout)
         return _parse_param_value(out, name)
 
     def get_props(self, timeout: float = 30.0) -> dict:
-        """Read all system parameters (``param get``) as ``{name: value}``."""
+        """``param get`` parsed into ``{name: value}``."""
         out = self.shell("param get", timeout=timeout)
         props = {}
         for line in out.replace("\r\n", "\n").split("\n"):
@@ -548,148 +661,102 @@ class HdcDevice:
         return props
 
     def device_info(self, timeout: float = 30.0) -> DeviceInfo:
-        """Device info (model / brand / OS version / API version ...)."""
+        """Device info assembled from ``param get`` (model/brand/OS/API ...)."""
         return DeviceInfo(self.serial, self.get_props(timeout=timeout))
 
-    def window_size(self, timeout: float = 30.0) -> WindowSize:
-        """Screen resolution (width, height), parsed from the screenshot JPEG
-        SOF marker -- rotation-aware."""
-        data = self.screenshot_data(timeout=timeout)
-        width, height = _jpeg_size(data)
-        return WindowSize(width, height)
-
-    def battery(self, timeout: float = 15.0) -> dict:
-        """Battery info (``hidumper -s BatteryService``; best-effort parse)."""
-        out = self.shell(
-            ["hidumper", "-s", "BatteryService", "-a", "-i"], timeout=timeout)
-        info = {}
-        for line in out.splitlines():
-            if ":" in line:
-                key, _, value = line.partition(":")
-                key, value = key.strip(), value.strip()
-                low = key.lower()
-                if low in ("capacity", "charge state", "voltage", "battery capacity"):
-                    info[low.replace(" ", "_")] = value
-        if not info:
-            raise HdcCommandError(
-                "battery parse failed (hidumper output changed?):\n%s" % out[:400],
-                output=out)
-        return info
-
-    def reboot(self, mode: Optional[str] = None, timeout: float = 15.0) -> None:
-        """Reboot the device (``mode`` may be ``"bootloader"``/``"recovery"``)."""
-        command = "reboot" + (" %s" % mode if mode else "")
-        self._execute(command, check_fail=False, timeout=timeout)
-
-    def wait_for_device(self, timeout: float = 30.0, poll_interval: float = 1.0):
-        """Wait until this device is back online (e.g. after a reboot)."""
-        return self.client.wait_for_device(self.serial, timeout=timeout,
-                                           poll_interval=poll_interval)
-
-    # ------------------------------------------------------------------
-    # Screen / power / root / tcpip (adbutils parity)
-    # ------------------------------------------------------------------
-    def screen_on(self, timeout: float = 15.0) -> None:
-        """Turn the screen on (``power-shell wakeup``)."""
-        self.shell(["power-shell", "wakeup"], timeout=timeout)
-
-    def screen_off(self, timeout: float = 15.0) -> None:
-        """Turn the screen off (``power-shell suspend``)."""
-        self.shell(["power-shell", "suspend"], timeout=timeout)
-
-    def is_screen_on(self, timeout: float = 15.0) -> bool:
-        """Whether the screen is on (``hidumper -s PowerManagerService``)."""
-        out = self.shell(
-            ["hidumper", "-s", "PowerManagerService", "-a", "-s"], timeout=timeout)
-        match = re.search(r"[Ss]creen\s*[Ss]tate[:\s]+(\w+)", out)
-        if match:
-            return match.group(1).upper() in ("ON", "AWAKE")
-        match = re.search(r"[\s\"](off|on)[\s\"]", out, re.IGNORECASE)
-        if match:
-            return match.group(1).lower() == "on"
-        raise HdcCommandError(
-            "is_screen_on parse failed:\n%s" % out[:400], output=out)
-
-    def unlock(self, timeout: float = 15.0) -> None:
-        """Wake the screen and swipe up to unlock (password-free lock only)."""
-        self.screen_on(timeout=timeout)
-        time.sleep(0.3)
-        size = self.window_size(timeout=timeout)
-        self.swipe(size.width / 2, size.height * 0.8,
-                   size.width / 2, size.height * 0.2, timeout=timeout)
-
-    def volume_up(self, timeout: float = 15.0) -> None:
-        self.keyevent(KeyCode.VOLUME_UP, timeout=timeout)
-
-    def volume_down(self, timeout: float = 15.0) -> None:
-        self.keyevent(KeyCode.VOLUME_DOWN, timeout=timeout)
-
-    def root(self, timeout: float = 15.0) -> str:
-        """Switch the daemon to root mode (``hdc smode``; the adbutils
-        ``root()`` analogue). Requires an image that permits it."""
-        out = self._execute("smode", check_fail=False, timeout=timeout)
-        return out.decode("utf-8", "replace").strip()
-
-    def tcpip(self, port: int = 10123, timeout: float = 30.0) -> str:
-        """Switch the daemon to TCP mode (``hdc tmode port <port>``);
-        afterwards call ``client.connect("ip:port")``."""
-        out = self._execute("tmode port %d" % int(port), check_fail=False,
-                            timeout=timeout)
-        return out.decode("utf-8", "replace").strip()
-
-    # ------------------------------------------------------------------
-    # Input (uitest uiInput -- the OpenHarmony equivalent of adb ``input``;
-    # plain shell commands, no UI automation layer involved)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # UI input -- `uitest uiInput <click|doubleClick|longClick|fling|swipe|
+    # drag|dircFling|inputText|text|keyEvent>`
+    # ==================================================================
     def click(self, x: float, y: float, timeout: float = 15.0) -> None:
-        """Tap the screen (``uitest uiInput click``)."""
+        """``uitest uiInput click <x> <y>``."""
         self.shell(["uitest", "uiInput", "click", int(x), int(y)], timeout=timeout)
 
     def double_click(self, x: float, y: float, timeout: float = 15.0) -> None:
+        """``uitest uiInput doubleClick <x> <y>``."""
         self.shell(["uitest", "uiInput", "doubleClick", int(x), int(y)], timeout=timeout)
 
     def long_click(self, x: float, y: float, timeout: float = 15.0) -> None:
+        """``uitest uiInput longClick <x> <y>``."""
         self.shell(["uitest", "uiInput", "longClick", int(x), int(y)], timeout=timeout)
 
+    def fling(self, x1: float, y1: float, x2: float, y2: float,
+              speed: int = 500, timeout: float = 15.0) -> None:
+        """``uitest uiInput fling <x1> <y1> <x2> <y2> <speed>`` (quick swipe)."""
+        self.shell(["uitest", "uiInput", "fling", int(x1), int(y1),
+                    int(x2), int(y2), int(speed)], timeout=timeout)
+
     def swipe(self, x1: float, y1: float, x2: float, y2: float,
-              speed: Optional[int] = None, timeout: float = 15.0) -> None:
-        """Swipe (``uitest uiInput swipe x1 y1 x2 y2 [speed]``)."""
+              speed: int = 500, timeout: float = 15.0) -> None:
+        """``uitest uiInput swipe <x1> <y1> <x2> <y2> [speed]``."""
         args = ["uitest", "uiInput", "swipe", int(x1), int(y1), int(x2), int(y2)]
         if speed is not None:
             args.append(int(speed))
         self.shell(args, timeout=timeout)
 
     def drag(self, x1: float, y1: float, x2: float, y2: float,
-             speed: Optional[int] = None, timeout: float = 15.0) -> None:
+             speed: int = 500, timeout: float = 15.0) -> None:
+        """``uitest uiInput drag <x1> <y1> <x2> <y2> [speed]``."""
         args = ["uitest", "uiInput", "drag", int(x1), int(y1), int(x2), int(y2)]
         if speed is not None:
             args.append(int(speed))
         self.shell(args, timeout=timeout)
 
-    def keyevent(self, key, timeout: float = 15.0) -> None:
-        """Press a key (``uitest uiInput keyEvent``); ``key`` accepts a
-        :class:`KeyCode`, an int, or a name such as ``"Back"``."""
-        self.shell(["uitest", "uiInput", "keyEvent", key], timeout=timeout)
-
-    def send_keys(self, text: str, x: Optional[float] = None, y: Optional[float] = None,
-                  timeout: float = 15.0) -> None:
-        """adbutils-compatible text input; see :meth:`input_text`."""
-        self.input_text(text, x, y, timeout=timeout)
-
-    def input_text(self, text: str, x: Optional[float] = None, y: Optional[float] = None,
+    def dirc_fling(self, direction: int, speed: int = 500,
                    timeout: float = 15.0) -> None:
-        """Type text at a position (``uitest uiInput inputText x y text``);
-        without coordinates the screen center is tapped first."""
-        if x is None or y is None:
-            size = self.window_size(timeout=timeout)
-            x, y = size.width / 2, size.height / 2
-            self.click(x, y, timeout=timeout)
+        """``uitest uiInput dircFling <direction> [speed]``.
+
+        Direction: 0 = left, 1 = right, 2 = up, 3 = down.
+        """
+        self.shell(["uitest", "uiInput", "dircFling", int(direction), int(speed)],
+                   timeout=timeout)
+
+    def input_text(self, x: float, y: float, text: str,
+                   timeout: float = 15.0) -> None:
+        """``uitest uiInput inputText <x> <y> <text>`` (focus the field first)."""
         self.shell(["uitest", "uiInput", "inputText", int(x), int(y), text],
                    timeout=timeout)
 
-    # ------------------------------------------------------------------
-    # Screenshot
-    # ------------------------------------------------------------------
+    def text(self, content: str, timeout: float = 15.0) -> None:
+        """``uitest uiInput text <content>``: type into the focused field."""
+        self.shell(["uitest", "uiInput", "text", content], timeout=timeout)
+
+    def key_event(self, key, timeout: float = 15.0) -> None:
+        """``uitest uiInput keyEvent <key>``.
+
+        ``key`` accepts a :class:`KeyCode`, an int, or a documented name such
+        as ``"Back"`` / ``"Home"``.
+        """
+        self.shell(["uitest", "uiInput", "keyEvent", key], timeout=timeout)
+
+    def volume_up(self, timeout: float = 15.0) -> None:
+        """``uitest uiInput keyEvent 16`` (KEYCODE_VOLUME_UP)."""
+        self.key_event(KeyCode.VOLUME_UP, timeout=timeout)
+
+    def volume_down(self, timeout: float = 15.0) -> None:
+        """``uitest uiInput keyEvent 17`` (KEYCODE_VOLUME_DOWN)."""
+        self.key_event(KeyCode.VOLUME_DOWN, timeout=timeout)
+
+    def uitest_screen_cap(self, path: Optional[str] = None,
+                          display_id: Optional[int] = None,
+                          timeout: float = 30.0) -> str:
+        """``uitest screenCap [-p <path>] [-d <displayId>]``.
+
+        The path must be under ``/data/local/tmp/``; returns it.
+        """
+        target = path or "/data/local/tmp/hdcutils_screencap_%d.png" % int(
+            time.time() * 1000) % 100000
+        parts = ["uitest", "screenCap", "-p", target]
+        if display_id is not None:
+            parts += ["-d", str(display_id)]
+        out = self.shell(parts, timeout=timeout)
+        if re.search(r"[Ee]rror|[Ff]ail", out):
+            raise HdcCommandError(out.strip(), output=out)
+        return target
+
+    # ==================================================================
+    # Screen & power -- `snapshot_display` / `power-shell` / `hidumper`
+    # ==================================================================
     def screenshot(
         self,
         save_path: Optional[str] = None,
@@ -698,10 +765,10 @@ class HdcDevice:
     ):
         """Take a screenshot.
 
-        Prefers ``snapshot_display -f <remote>``, falls back to
-        ``uitest screenCap``; the file travels back over the socket protocol.
-        Returns ``PIL.Image`` when Pillow is installed, otherwise raw JPEG
-        bytes; saves to ``save_path`` when provided.
+        Prefers ``snapshot_display -f <remote>``, falling back to
+        ``uitest screenCap -p <remote>``; the file comes back over the socket
+        file protocol. Returns ``PIL.Image`` when Pillow is installed,
+        otherwise raw JPEG bytes; saves to ``save_path`` when given.
         """
         data = self.screenshot_data(display_id=display_id, timeout=timeout)
         if save_path:
@@ -715,7 +782,7 @@ class HdcDevice:
 
     def screenshot_data(self, display_id: Optional[int] = None,
                         timeout: float = 30.0) -> bytes:
-        """Take a screenshot and return raw JPEG bytes."""
+        """Screenshot as raw JPEG bytes (``snapshot_display`` / ``uitest screenCap``)."""
         remote = "/data/local/tmp/hdcutils_shot_%d_%d.jpeg" % (
             os.getpid(), int(time.time() * 1000) % 100000)
         if display_id is None:
@@ -742,15 +809,137 @@ class HdcDevice:
         self.shell("rm -f %s" % remote, timeout=10)
         return data
 
+    def window_size(self, timeout: float = 30.0) -> WindowSize:
+        """Screen resolution (width, height), parsed from the screenshot JPEG."""
+        data = self.screenshot_data(timeout=timeout)
+        width, height = _jpeg_size(data)
+        return WindowSize(width, height)
+
+    def power_shell(self, command: str, timeout: float = 15.0) -> str:
+        """``power-shell <command>``: device power-state transitions.
+
+        Documented commands include ``wakeup``, ``suspend``, ``setmode``,
+        ``timeout``; see the power-shell tool reference.
+        """
+        return self.shell(["power-shell", command], timeout=timeout)
+
+    def screen_on(self, timeout: float = 15.0) -> None:
+        """``power-shell wakeup``: turn the screen on."""
+        self.power_shell("wakeup", timeout=timeout)
+
+    def screen_off(self, timeout: float = 15.0) -> None:
+        """``power-shell suspend``: turn the screen off."""
+        self.power_shell("suspend", timeout=timeout)
+
+    def unlock(self, timeout: float = 15.0) -> None:
+        """Wake the screen and swipe up (works on password-free lock screens)."""
+        self.screen_on(timeout=timeout)
+        time.sleep(0.3)
+        size = self.window_size(timeout=timeout)
+        self.swipe(size.width / 2, size.height * 0.8,
+                   size.width / 2, size.height * 0.2, timeout=timeout)
+
+    def hidumper(self, *args, timeout: float = 30.0) -> str:
+        """``hidumper [-s <service>] [-a] ...``: system information export."""
+        return self.shell(["hidumper"] + [str(a) for a in args], timeout=timeout)
+
+    def battery(self, timeout: float = 15.0) -> dict:
+        """Battery info from ``hidumper -s BatteryService`` (best-effort parse)."""
+        out = self.shell(
+            ["hidumper", "-s", "BatteryService", "-a", "-i"], timeout=timeout)
+        info = {}
+        for line in out.splitlines():
+            if ":" in line:
+                key, _, value = line.partition(":")
+                key, value = key.strip(), value.strip()
+                low = key.lower()
+                if low in ("capacity", "charge state", "voltage", "battery capacity"):
+                    info[low.replace(" ", "_")] = value
+        if not info:
+            raise HdcCommandError(
+                "battery parse failed (hidumper output changed?):\n%s" % out[:400],
+                output=out)
+        return info
+
+    def is_screen_on(self, timeout: float = 15.0) -> bool:
+        """Screen state from ``hidumper -s PowerManagerService``."""
+        out = self.shell(
+            ["hidumper", "-s", "PowerManagerService", "-a", "-s"], timeout=timeout)
+        match = re.search(r"[Ss]creen\s*[Ss]tate[:\s]+(\w+)", out)
+        if match:
+            return match.group(1).upper() in ("ON", "AWAKE")
+        match = re.search(r"[\s\"](off|on)[\s\"]", out, re.IGNORECASE)
+        if match:
+            return match.group(1).lower() == "on"
+        raise HdcCommandError(
+            "is_screen_on parse failed:\n%s" % out[:400], output=out)
+
+    # ==================================================================
+    # Device connection helpers (the client-level commands live on HdcClient)
+    # ==================================================================
+    def tmode_port(self, port: int = 10123, timeout: float = 30.0) -> str:
+        """``hdc tmode port <port>``: open the device network channel.
+
+        Afterwards connect with :meth:`HdcClient.connect`. ``tmode usb`` is
+        deprecated since hdc 3.1.0e -- use the device's USB toggle instead.
+        """
+        out = self._execute("tmode port %d" % int(port), check_fail=False,
+                            timeout=timeout)
+        return out.decode("utf-8", "replace").strip()
+
+    def tmode_port_close(self, timeout: float = 15.0) -> str:
+        """``hdc tmode port close``: close the device network channel."""
+        out = self._execute("tmode port close", check_fail=False, timeout=timeout)
+        return out.decode("utf-8", "replace").strip()
+
+    def smode(self, timeout: float = 15.0) -> str:
+        """``hdc smode``: restart the daemon in root mode (needs a permissive image)."""
+        out = self._execute("smode", check_fail=False, timeout=timeout)
+        return out.decode("utf-8", "replace").strip()
+
+    def wait(self, timeout: float = 30.0, poll_interval: float = 1.0):
+        """``hdc wait``: block until this device is online again."""
+        return self.client.wait(self.serial, timeout=timeout,
+                                poll_interval=poll_interval)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _execute(self, command: str, completion: Optional[str] = None,
+                 check_fail: bool = True, timeout: Optional[float] = None,
+                 idle_window: float = DEFAULT_IDLE_WINDOW) -> bytes:
+        return self.client._execute(
+            command, serial=self.serial, completion=completion,
+            check_fail=check_fail, timeout=timeout, idle_window=idle_window,
+        )
+
+    def _file_task(self) -> FileTask:
+        self.client._ensure()
+        return FileTask(self.client.host, self.client.port,
+                        connect_timeout=self.client.connect_timeout,
+                        connect_key=self.serial)
+
+    def _app_task(self) -> AppTask:
+        self.client._ensure()
+        return AppTask(self.client.host, self.client.port,
+                       connect_timeout=self.client.connect_timeout,
+                       connect_key=self.serial)
+
 
 class ForwardedSocket(socket.socket):
-    """adbutils-style tunnelled socket: drops the fport rule on close."""
+    """Socket returned by :meth:`HdcDevice.create_connection`.
+
+    Adopts the wrapped socket's file descriptor so it behaves like any
+    socket; closing it also removes the ``hdc fport`` task. The descriptor's
+    non-blocking flag is reset first, otherwise ``recv`` can raise
+    ``BlockingIOError`` (WinError 10035) on Windows.
+    """
 
     def __init__(self, sock: socket.socket, rule: str, device: "HdcDevice"):
         self._forward_rule = rule
         self._device = device
-        fd = sock.fileno()
-        sock.detach()
+        sock.settimeout(None)
+        fd = sock.detach()
         super().__init__(fileno=fd)
 
     def close(self) -> None:

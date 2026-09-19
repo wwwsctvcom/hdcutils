@@ -288,12 +288,27 @@ class MockHdcServer:
             else:
                 conn.sendall(self._frame(b"[Fail]Invalid fport rule\r\n"))
             return True
+        if command == "jpid":
+            conn.sendall(self._frame(b"12345  com.example.mock\r\n"))
+            return True
+        if command == "track-jpid" or command.startswith("track-jpid "):
+            for i in range(2):
+                conn.sendall(self._frame(("1234%d  com.example.mock\r\n" % i).encode()))
+                time.sleep(0.02)
+            return False
+        if command == "tmode port close":
+            conn.sendall(self._frame(b"Tmode port close success\r\n"))
+            return False
         if command == "hilog":
             for i in range(3):
                 conn.sendall(self._frame(("hilog line %d\r\n" % i).encode()))
                 time.sleep(0.02)
             return False
+        if command == "target boot" or command.startswith("target boot "):
+            return False
         if command == "reboot":
+            # official server rejects a bare reboot; mirror that
+            conn.sendall(self._frame(b"Unknown operation command...\r\n"))
             return False
         if command == "smode" or command.startswith("smode "):
             conn.sendall(self._frame(b"Set root run mode success\r\n"))
@@ -494,6 +509,30 @@ class MockHdcServer:
             return ("const.product.model = HUAWEI Mock Phone\r\n"
                     "const.product.manufacturer = Huawei\r\n"
                     "const.ohos.apiversion = 12\r\n")
+        if cmd.startswith("param ls"):
+            return "const.product.model = HUAWEI Mock Phone" + r + n
+        if cmd.startswith("param set "):
+            return ""
+        if cmd.startswith("param wait "):
+            return "wait param match success" + r + n
+        if cmd == "param save":
+            return ""
+        if cmd.startswith("uitest uiInput "):
+            return ""
+        if cmd.startswith("uitest screenCap"):
+            target = cmd.split("-p ")[-1].split()[0] if "-p " in cmd else                 "/data/local/tmp/mock.png"
+            self.device_files[target] = FAKE_JPEG
+            return ""
+        if cmd.startswith("power-shell"):
+            return ""
+        if cmd.startswith("bm get"):
+            return "udid: MOCK-UDID-1234" + r + n
+        if cmd.startswith("bugreport"):
+            parts = cmd.split()
+            if len(parts) > 1:
+                self.device_files[parts[1]] = b"[base] MockReport" + r.encode()
+                return ""
+            return "[base] MockReport" + r + n
         if cmd.startswith("test -f "):
             path = cmd[len("test -f "):].split("&&")[0].strip()
             if self._fake_exists(path):

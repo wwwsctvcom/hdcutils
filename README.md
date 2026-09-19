@@ -1,9 +1,9 @@
 # hdcutils
 
-**A pure-python HarmonyOS hdc library, modeled after
-[openatx/adbutils](https://github.com/openatx/adbutils). Every device
-operation speaks the wire protocol directly to the hdc server -- no hdc.exe
-involved, and no dependence on its version or install location.**
+**A pure-python HarmonyOS hdc library, named after the official hdc /
+OpenHarmony tool commands.** Every device operation speaks the wire protocol
+directly to the hdc server -- no hdc.exe involved, and no dependence on its
+version or install location.
 
 `hdc` is to HarmonyOS what adb is to Android. `hdcutils` talks to the hdc
 server (the resident process on the dev machine, listening on
@@ -39,7 +39,8 @@ for line in d.hilog(timeout=10):           # streamed logs
 - [Environment variables](#environment-variables)
 - [Short-connection model (power friendly)](#short-connection-model-adbutils-style-power-friendly)
 - [hdc socket protocol notes](#hdc-socket-protocol-notes)
-- [adbutils mapping](#adbutils-mapping)
+- [Naming and API reference](#naming-and-api-reference)
+- [API reference](#api-reference)
 - [Testing](#testing)
 - [Real device / emulator validation plan](#real-device--emulator-validation-plan)
 - [Known limitations](#known-limitations)
@@ -47,12 +48,11 @@ for line in d.hilog(timeout=10):           # streamed logs
 
 ## Exe-free architecture
 
-adbutils talks to the adb server (127.0.0.1:5037) in pure python and uses
-external tools only for a few extras. hdcutils goes further: **all device
-operations (the server command channel + the file/app wire protocols +
-server process management) are implemented over plain sockets / pure
-python**, so bundled-vs-PATH hdc binaries and SDK version churn cannot
-affect them:
+Like adbutils does for adb, hdcutils talks to the hdc server
+(127.0.0.1:8710) in pure python -- and goes further: **all device operations
+(the server command channel + the file/app wire protocols + server process
+management) are implemented over plain sockets / pure python**, so
+bundled-vs-PATH hdc binaries and SDK version churn cannot affect them:
 
 ```
                         +--------------------------------------------+
@@ -171,8 +171,8 @@ with d.open_shell() as sh:
 Waiting for a device:
 
 ```python
-d = hdc.wait_for_device(timeout=30)          # poll until any device is ready
-d = hdc.wait_for_device("SN123456", timeout=30)
+d = hdc.wait(timeout=30)                     # `hdc wait`: block until a device is ready
+d = hdc.wait("SN123456", timeout=30)         # ... for a specific target
 ```
 
 Multiple devices in parallel:
@@ -186,82 +186,125 @@ for d in hdc.device_list():
 
 ### HdcClient(host='127.0.0.1', port=None, hdc_path=None, auto_start=True)
 
-| Member | Description |
+Named after the official hdc commands.
+
+| Method | Official command |
 |---|---|
-| `list_targets(verbose=False)` | Device list; `False` -> `[str]`, `True` -> `[TargetInfo]` |
-| `device(serial=None)` | `HdcDevice`; single device auto-selected, multiple raises |
-| `device_list()` / `list()` | All devices (adbutils-compatible aliases) |
-| `connect(addr)` / `disconnect(addr)` | `hdc tconn [addr -remove]` |
-| `wait_for_device(serial=None, timeout, poll_interval)` / `wait_for(...)` | Poll until a device is ready |
-| `server_version()` | `checkserver`, returns the server version |
-| `start_server()` / `kill_server()` / `restart_server()` | Server process management (kill is pure python) |
-| `stream_command(cmd, serial=None, timeout=None)` | Run a command, yield raw chunks until EOF |
+| `list_targets(verbose=False)` | `hdc list targets [-v]` |
+| `device(serial=None)` | (select a target; single device auto-selected) |
+| `device_list()` | `hdc list targets` |
+| `connect(addr)` / `disconnect(addr)` | `hdc tconn <ip:port> [-remove]` |
+| `wait(serial=None, timeout, poll_interval)` | `hdc wait` |
+| `server_version()` | `hdc checkserver` |
+| `start_server()` / `kill_server()` / `restart_server()` | `hdc start` / `hdc kill` |
+| `stream_command(cmd, serial=None, timeout=None)` | `hdc shell` (streamed) |
 
 ### HdcDevice(client, serial)
 
-**shell / logs**
+**Shell -- `hdc shell`**
 
-| Member | Description |
+| Method | Official command |
 |---|---|
-| `shell(cmd, stream=False, timeout=None)` | Run a command, return text; `cmd` is a str or list; `stream=True` yields raw chunks |
-| `shell_bytes(cmd)` | Same, returning raw bytes |
-| `shell2(cmd)` | Return `(output, returncode)` (via the `echo __RC__$?` trick) |
-| `open_shell()` | Interactive shell session (`ShellSession.send/recv/close`) |
-| `stream_shell(cmd)` / `stream_lines(cmd)` | Stream a command (frames / lines) |
-| `hilog(*args, timeout=None)` / `logcat(...)` | Streamed device logs (line by line) |
+| `shell(cmd, stream=False)` | `hdc shell <cmd>` |
+| `shell_bytes(cmd)` | `hdc shell <cmd>` (raw bytes) |
+| `shell2(cmd)` | `hdc shell <cmd>` + return code |
+| `open_shell()` | `hdc shell` (interactive terminal) |
+| `stream_shell(cmd)` / `stream_lines(cmd)` | `hdc shell` (streamed) |
 
-**Files (pure-socket file protocol)**
+**Device operations -- `hdc hilog` / `jpid` / `track-jpid` / `target boot` / `bugreport`**
 
-| Member | Description |
+| Method | Official command |
 |---|---|
-| `send_file(local, remote, timeout, hold_timestamp, update_if_new)` | Push a file (`-a`/`-sync` options) |
-| `recv_file(remote, local, timeout)` | Pull a file |
-| `send_dir(local_dir, remote_dir)` / `pull_dir(remote_dir, local_dir)` | Directory transfer (per file + mkdir) |
-| `read_file(remote)` / `write_file(remote, data)` | base64 over socket, small files |
-| `sync.push/pull/read_bytes/read_text/write_bytes/write_text/iter_content` | adbutils-style namespace |
-| `install(path, *args, timeout=600)` | `hdc install [-r] <path>` (pure-socket app protocol) |
-| `uninstall(bundle, keep_data=False)` | `hdc uninstall [-k]` |
+| `hilog(*args, timeout=None)` | `hdc hilog [-h]` |
+| `jpid()` | `hdc jpid` |
+| `track_jpid(*args)` | `hdc track-jpid [-a\|-p]` |
+| `target_boot(mode=None)` | `hdc target boot [-bootloader\|-recovery]` |
+| `bugreport(path=None)` | `hdc bugreport [FILE]` |
 
-**Apps**
+**File transfer -- `hdc file send` / `hdc file recv`**
 
-| Member | Description |
+| Method | Official command |
 |---|---|
-| `list_apps()` / `list_packages()` | `bm dump -a` bundle names |
-| `app_info(bundle)` | `bm dump -n`; dict when parseable JSON |
-| `app_version(bundle)` | versionName |
-| `app_start(bundle, ability=None, url=None)` | `aa start -b ... [-a ...] [-U ...]` |
-| `open_browser(url)` / `open_url(url)` | `aa start -U`, schema/browser launch |
-| `app_stop(bundle)` / `app_clear(bundle)` | `aa force-stop` / `bm clean -d` |
-| `app_current()` | Foreground app (`AppCurrentInfo`, hidumper AbilityManagerService) |
+| `send_file(local, remote, hold_timestamp, update_if_new)` | `hdc file send [-a\|-sync] SOURCE DEST` |
+| `recv_file(remote, local)` | `hdc file recv DEST SOURCE` |
+| `sync.push()` / `sync.pull()` | same, session-style namespace |
+| `sync.read_bytes/read_text/write_bytes/write_text/iter_content` | base64 over `hdc shell` |
+| `send_dir()` / `pull_dir()` | per-file send/recv + `mkdir` |
+| `read_file(remote)` / `write_file(remote, data)` | base64 over `hdc shell` |
 
-**Input / power / info**
+**App management -- `hdc install` / `hdc uninstall` / `aa` / `bm`**
 
-| Member | Description |
+| Method | Official command |
 |---|---|
-| `click/double_click/long_click(x, y)` | `uitest uiInput` tap family |
-| `swipe(x1,y1,x2,y2,speed=None)` / `drag(...)` | Swipe / drag |
-| `keyevent(key)` | `uitest uiInput keyEvent`; `KeyCode` (Back/Home/VolumeUp/VolumeDown/Power/Menu), int, or name |
-| `send_keys(text, x=None, y=None)` / `input_text(...)` | `uitest uiInput inputText`; taps the screen center first without coordinates |
-| `volume_up()/volume_down()` | Volume keys |
-| `screen_on()/screen_off()/is_screen_on()/unlock()` | `power-shell wakeup/suspend` + hidumper + swipe-up unlock |
-| `battery()` | `hidumper -s BatteryService` (capacity / charge state) |
-| `get_prop(name)` / `get_props()` | `param get` system parameters |
-| `device_info()` | `DeviceInfo` (model/brand/os_version/api_version ...) |
-| `window_size()` | Screen resolution, parsed from the screenshot JPEG SOF marker |
-| `reboot(mode=None)` | Reboot (`bootloader`/`recovery`) |
-| `screenshot(save_path=None, display_id=None)` | Screenshot: `snapshot_display -f`, falling back to `uitest screenCap` |
-| `wait_for_device(timeout, poll_interval)` | Wait until this device is online |
+| `install(path, *opts)` | `hdc install [-r\|-s\|-w\|-u\|-p\|-g] src` |
+| `uninstall(bundle, keep_data)` | `hdc uninstall [-n\|-k\|-s] bundlename` |
+| `aa_start(bundle, ability, url)` | `aa start -b <bundle> [-a <ability>] [-U <url>]` |
+| `aa_force_stop(bundle)` | `aa force-stop <bundle>` |
+| `aa_dump(*args)` | `aa dump` (deprecated upstream) |
+| `bm_dump(bundle, *args)` / `app_info()` / `app_version()` | `bm dump -n <bundle>` |
+| `list_apps()` | `bm dump -a` |
+| `bm_clean(bundle, *args)` | `bm clean -n <bundle> -d` |
+| `bm_get(*args)` | `bm get --udid` |
+| `app_current()` | `hidumper -s AbilityManagerService` |
 
-**Port forwarding**
+**Port forwarding -- `hdc fport` / `hdc rport`**
 
-| Member | Description |
+| Method | Official command |
 |---|---|
-| `fport(local, remote)` / `rport(remote, local)` | forward / reverse rules (aliases: `forward`/`reverse`) |
-| `fport_list()` / `forward_list()` | List rules |
-| `fport_remove(rule)` / `forward_remove(rule)` / `fport_remove_all()` | Remove rules |
-| `create_connection(what, port)` | adbutils-style tunnel (`"tcp"` or `"unix"`/`localabstract`); the rule is removed on socket close |
-| `root()` | `hdc smode` (root-mode daemon) |
-| `tcpip(port=10123)` | `hdc tmode port <port>`, then `client.connect("ip:port")` |
+| `fport(local, remote)` | `hdc fport <localnode> <remotenode>` |
+| `rport(remote, local)` | `hdc rport <remotenode> <localnode>` |
+| `fport_list()` | `hdc fport ls` |
+| `fport_remove(task)` / `fport_remove_all()` | `hdc fport rm <task>` |
+| `create_connection(what, port)` | `hdc fport` + local socket |
+
+**System parameters -- `param`**
+
+| Method | Official command |
+|---|---|
+| `param_get(name=None)` | `param get [name]` |
+| `param_ls(name=None, recursive=False)` | `param ls [-r] [name]` |
+| `param_set(name, value)` | `param set name value` |
+| `param_wait(name, value, timeout)` | `param wait name [value] [timeout]` |
+| `param_save()` | `param save` |
+| `get_prop(name)` / `get_props()` / `device_info()` | `param get` (parsed) |
+
+**UI input -- `uitest uiInput <subcommand>`**
+
+| Method | Official command |
+|---|---|
+| `click(x, y)` / `double_click(x, y)` / `long_click(x, y)` | `uitest uiInput click\|doubleClick\|longClick <x> <y>` |
+| `swipe(x1,y1,x2,y2,speed=500)` | `uitest uiInput swipe <x1> <y1> <x2> <y2> [speed]` |
+| `drag(x1,y1,x2,y2,speed=500)` | `uitest uiInput drag ...` |
+| `fling(x1,y1,x2,y2,speed=500)` | `uitest uiInput fling ...` |
+| `dirc_fling(direction, speed=500)` | `uitest uiInput dircFling <direction> [speed]` |
+| `input_text(x, y, text)` | `uitest uiInput inputText <x> <y> <text>` |
+| `text(content)` | `uitest uiInput text <content>` |
+| `key_event(key)` / `volume_up()` / `volume_down()` | `uitest uiInput keyEvent <key>` |
+| `uitest_screen_cap(path, display_id)` | `uitest screenCap [-p <path>] [-d <displayId>]` |
+
+**Screen & power -- `snapshot_display` / `power-shell` / `hidumper`**
+
+| Method | Official command |
+|---|---|
+| `screenshot(save_path, display_id)` | `snapshot_display -f` (fallback `uitest screenCap -p`) |
+| `screenshot_data(display_id)` | same, raw JPEG bytes |
+| `window_size()` | derived from a screenshot (JPEG SOF) |
+| `power_shell(command)` | `power-shell <command>` |
+| `screen_on()` / `screen_off()` | `power-shell wakeup` / `power-shell suspend` |
+| `unlock()` | `power-shell wakeup` + `uitest uiInput swipe` |
+| `hidumper(*args)` | `hidumper [-s <service>] [-a] ...` |
+| `battery()` | `hidumper -s BatteryService` |
+| `is_screen_on()` | `hidumper -s PowerManagerService` |
+
+**Connection helpers**
+
+| Method | Official command |
+|---|---|
+| `tmode_port(port=10123)` | `hdc tmode port <port>` |
+| `tmode_port_close()` | `hdc tmode port close` |
+| `smode()` | `hdc smode` |
+| `wait(timeout, poll_interval)` | `hdc wait` (this device) |
+
 
 ## CLI usage
 
@@ -289,7 +332,7 @@ auto-start the server), `--no-auto-start`.
 | `HDCUTILS_HDC_SERVER_PORT` | hdcutils-specific override (highest priority) |
 | `HDCUTILS_HDC_PATH` | hdc executable path (**only used to auto-start the server**) |
 
-## Short-connection model (adbutils-style, power-friendly)
+## Short-connection model (power-friendly)
 
 The communication model was cross-checked against three sources:
 
@@ -307,7 +350,7 @@ hdcutils follows the same model and tightens it further:
 |---|---|
 | All ordinary APIs (shell / file / install / fport ...) | **one connection per command**, closed as soon as the response is complete (EOF or single-frame done); no lingering objects |
 | list targets / checkserver / tconn | Single-frame responses (verified in source) -- **done on first frame** (80ms window), no idle tail |
-| wait_for_device | Polling is owned by the library; each round is one short connection, no background threads |
+| `wait` (`hdc wait`) | Polling is owned by the library; each round is one short connection, no background threads |
 | `hilog()` / `open_shell()` / `stream_command()` | **explicit long connections** (streaming scenarios); close them between capture sessions |
 | Liveness probing | 30s cache; no per-command probe, no heartbeats, no background polling |
 
@@ -385,26 +428,75 @@ interactive shell (`shell` with no arguments) enters
 `interactiveShellMode` where every frame payload is treated as stdin and
 `exit` ends the session.
 
+## Naming and API reference
+
+**The API is named after the official hdc / OpenHarmony tool commands.**
+Every public method maps onto a documented command, and the device-side
+command text sent over the wire is exactly the official syntax:
+
+* [hdc tool reference](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/dfx/hdc.md)
+  -- `list targets`, `wait`, `tconn`, `tmode`, `shell`, `file send|recv`,
+  `install`, `uninstall`, `fport|rport|fport ls|fport rm`, `start`, `kill`,
+  `checkserver`, `hilog`, `jpid`, `track-jpid`, `target boot`, `bugreport`
+* [aa tool](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/tools/aa-tool.md)
+  -- `aa start`, `aa force-stop`, `aa dump`
+* [bm tool](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/tools/bm-tool.md)
+  -- `bm dump`, `bm clean`, `bm get`
+* [param tool](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/tools/param-tool.md)
+  -- `param get|ls|set|wait|save`
+* [uitest](https://gitee.com/openharmony/docs/blob/master/zh-cn/application-dev/application-test/uitest-guidelines.md)
+  -- `uitest uiInput click|doubleClick|longClick|fling|swipe|drag|dircFling|inputText|text|keyEvent`,
+  `uitest screenCap`
+* device tools -- `snapshot_display`, `power-shell`, `hidumper`
+
+Method names follow the command names, including the hdc-specific ones
+(`target_boot`, `tmode_port`, `smode`, `jpid`, `track_jpid`, `param_*`,
+`bm_*`, `aa_*`). Where a command has subcommands, the method carries the
+subcommand as a prefix (`aa_start`, `bm_clean`, `param_set`), which is how
+the official docs group them.
+
+Two deliberate consequences:
+
+* **`target_boot()` (not `reboot()`)** -- the official hdc command is
+  `target boot`; a bare `reboot` is rejected by the real server with
+  `Unknown operation command...` (verified against the official 6.1
+  toolchain).
+* **`uitest uiInput` (not `uinput`)** -- both device-side tools are official,
+  but `uitest uiInput` is the documented UI-operation interface whose
+  vocabulary (`click`/`swipe`/`drag`/`inputText`/`keyEvent`) matches the
+  commands users already know; `uinput` targets stability-testing event
+  injection (mouse/keyboard/touch at the device level).
+
+Callers coming from Android/adbutils can map names one-to-one; the previous
+adbutils aliases were removed to keep a single, official vocabulary.
+
 ## adbutils mapping
 
-| adbutils | hdcutils |
+For callers porting Android automation code, the one-to-one equivalents:
+
+| adbutils / Android | hdcutils (official hdc name) |
 |---|---|
 | `adb.device_list()` | `hdc.list_targets()` |
 | `adb.device(serial)` | `hdc.device(serial)` |
-| `d.shell(cmd)` / `d.shell2(cmd)` | same names, same semantics |
-| `d.sync.push/pull` | `d.sync.push/pull` (pure socket) |
-| `d.install/uninstall` | `d.install/uninstall` (pure socket) |
-| `d.forward/reverse` | `d.fport/rport` (aliases `forward`/`reverse`) |
-| `d.create_connection(...)` | `d.create_connection(what, port)` |
-| `d.screenshot()` | `d.screenshot()` |
-| `d.logcat()` | `d.logcat()` (hilog) |
-| `d.prop.*` | `d.prop.get()` / `d.get_props()` |
-| `d.click/swipe/drag/send_keys/keyevent` | same names (uitest uiInput) |
-| `d.window_size()` | `d.window_size()` (screenshot SOF parse) |
-| `d.app_current()` | `d.app_current()` (hidumper) |
-| `d.root()` / `d.tcpip()` | `d.root()` (smode) / `d.tcpip()` (tmode port) |
-| `adb.connect/disconnect` | `hdc.connect/disconnect` |
-| `adb.wait_for(state='device')` | `hdc.wait_for()` |
+| `d.shell(cmd)` / `d.shell2(cmd)` | `d.shell(cmd)` / `d.shell2(cmd)` |
+| `d.sync.push/pull` | `d.sync.push/pull` (`hdc file send/recv`) |
+| `d.install/uninstall` | `d.install/uninstall` |
+| `d.forward/reverse` | `d.fport/rport` |
+| `d.forward_list/forward_remove` | `d.fport_list/fport_remove` |
+| `d.screenshot()` | `d.screenshot()` (`snapshot_display`) |
+| `d.logcat()` | `d.hilog()` |
+| `d.prop.get(name)` | `d.param_get(name)` / `d.get_prop(name)` |
+| `d.click/swipe/drag/long_click/double_click` | same names (`uitest uiInput`) |
+| `d.send_keys(text)` | `d.text(content)` / `d.input_text(x, y, text)` |
+| `d.keyevent(k)` | `d.key_event(k)` |
+| `d.window_size()` | `d.window_size()` |
+| `d.app_current()` | `d.app_current()` (`hidumper`) |
+| `d.app_start/stop/clear` | `d.aa_start` / `d.aa_force_stop` / `d.bm_clean` |
+| `d.list_packages()` | `d.list_apps()` (`bm dump -a`) |
+| `d.root()` | `d.smode()` |
+| `d.tcpip(port)` | `d.tmode_port(port)` |
+| `adb.connect/disconnect` | `hdc.connect/disconnect` (`hdc tconn`) |
+| `adb.wait_for(state='device')` | `hdc.wait()` |
 
 ## Testing
 

@@ -29,21 +29,29 @@ d.long_click(cx, cy)
 d.swipe(cx, int(size.height * 0.8), cx, int(size.height * 0.2))   # swipe up
 d.drag(cx, cy, cx + 100, cy + 100)
 
-# 4. Keys and text.
-d.keyevent(hdcutils.KeyCode.BACK)          # KeyCode int
-d.keyevent("Home")                         # or a key name
-d.send_keys("hdcutils")                    # taps the screen center, then types
+# 4. Keys and text (official uitest uiInput subcommands).
+d.key_event(hdcutils.KeyCode.BACK)          # keyEvent <keyCode>
+d.key_event("Home")                         # or the documented name
+d.text("hdcutils")                          # `text <content>` -> focused field
+d.input_text(100, 200, "typed")             # `inputText <x> <y> <text>`
+d.fling(cx, int(size.height * 0.8), cx, int(size.height * 0.2))   # fling
+d.dirc_fling(3)                             # dircFling 3 = down
 d.volume_up()
 d.volume_down()
 
-# 5. Power state.
+# 5. Official hdc command names are available as aliases, e.g.
+#    d.target_boot("recovery")  ==  d.target_boot("recovery")  -> `hdc target boot recovery`
+#    d.smode()                  ==  d.smode()             -> `hdc smode`
+#    d.tmode_port(10123)        ==  d.tmode_port(10123)       -> `hdc tmode port 10123`
+
+# 6. Power state.
 print("screen on    :", d.is_screen_on())
 d.screen_off()
 time.sleep(0.5)
 d.screen_on()
 d.unlock()                                 # wake + swipe up (password-free lock)
 
-# 6. Battery info (hidumper BatteryService, best-effort parse).
+# 7. Battery info (hidumper BatteryService, best-effort parse).
 try:
     print("battery      :", d.battery())
 except hdcutils.HdcCommandError as exc:

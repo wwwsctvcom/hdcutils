@@ -76,7 +76,7 @@ class TargetInfo:
 
         The official ``list targets -v`` also reports UART/COM probe entries
         and unauthorized devices as ``Ready`` -- those are not usable targets
-        (device()/wait_for_device must ignore them; the official
+        (device()/wait() must ignore them; the official
         non-verbose list excludes them too).
         """
         return self.state.lower() == "connected"
@@ -108,6 +108,10 @@ def resolve_port(port: Optional[int]) -> int:
 
 class HdcClient:
     """hdc server client (pure socket; hdc.exe only pulls up the server).
+
+    Methods are named after the official hdc commands: ``list targets``,
+    ``wait``, ``tconn``, ``checkserver``, ``start``, ``kill``, ``tmode``,
+    ``fport ls``.
 
     Args:
         host: hdc server address, default ``127.0.0.1``.
@@ -238,10 +242,6 @@ class HdcClient:
         """Return :class:`HdcDevice` handles for every connected device."""
         return [HdcDevice(self, key) for key in self.list_targets()]
 
-    def list(self) -> List[HdcDevice]:
-        """adbutils-compatible alias of :meth:`device_list`."""
-        return self.device_list()
-
     def connect(self, addr: str, timeout: float = 15.0) -> str:
         """Connect a network device (``hdc tconn <ip:port>``)."""
         return self._execute(
@@ -254,10 +254,14 @@ class HdcClient:
             "tconn %s -remove" % addr, check_fail=False
         ).strip().decode("utf-8", "replace")
 
-    def wait_for_device(
+    def wait(
         self, serial: Optional[str] = None, timeout: float = 30.0, poll_interval: float = 1.0
     ) -> HdcDevice:
-        """Poll ``list targets -v`` until a device is ready and return it."""
+        """``hdc wait``: block until a device is ready, then return it.
+
+        Polls ``list targets -v`` (only ``Connected`` targets count; UART/COM
+        probe entries reported as ``Ready`` are ignored).
+        """
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -272,16 +276,10 @@ class HdcClient:
                 return HdcDevice(self, ready[0].connect_key)
             if time.monotonic() >= deadline:
                 raise HdcTimeoutError(
-                    "wait_for_device%s timed out after %.0fs" % (
+                    "wait%s timed out after %.0fs" % (
                         "(%s)" % serial if serial else "", timeout)
                 )
             time.sleep(poll_interval)
-
-    def wait_for(self, serial: Optional[str] = None, timeout: float = 30.0,
-                 poll_interval: float = 1.0) -> HdcDevice:
-        """adbutils-compatible alias of :meth:`wait_for_device`."""
-        return self.wait_for_device(serial=serial, timeout=timeout,
-                                    poll_interval=poll_interval)
 
     # ---------------------------------------------------------------
     # Execution

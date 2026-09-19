@@ -74,15 +74,15 @@ def test_multi_device_requires_serial(mock_port):
     assert d.serial == "MOCKSERIAL1"
 
 
-def test_wait_for_device(client):
-    device = client.wait_for_device("MOCKSERIAL2", timeout=5)
+def test_wait(client):
+    device = client.wait("MOCKSERIAL2", timeout=5)
     assert device.serial == "MOCKSERIAL2"
 
 
 def test_wait_for_device_timeout(mock_port):
     client = hdcutils.HdcClient(port=mock_port, auto_start=False)
     with pytest.raises(HdcTimeoutError):
-        client.wait_for_device("NOEXIST", timeout=1.5, poll_interval=0.2)
+        client.wait("NOEXIST", timeout=1.5, poll_interval=0.2)
 
 
 # ---------------------------------------------------------------------
@@ -183,7 +183,7 @@ def test_fport_list(client):
 
 
 def test_reboot(client):
-    client.device("MOCKSERIAL1").reboot()  # no exception is the assertion
+    client.device("MOCKSERIAL1").target_boot()  # no exception is the assertion
 
 
 def test_unknown_command_raises(client):
@@ -264,15 +264,15 @@ def test_app_info_json(client):
 
 def test_app_start_stop(client):
     d = client.device("MOCKSERIAL1")
-    d.app_start("com.example.mock")  # success raises nothing
-    d.app_stop("com.example.mock")
+    d.aa_start("com.example.mock")  # success raises nothing
+    d.aa_force_stop("com.example.mock")
 
 
 def test_app_start_fail(client, monkeypatch):
     d = client.device("MOCKSERIAL1")
     monkeypatch.setattr(d, "shell", lambda *a, **kw: "[Fail]Operation failed")
     with pytest.raises(HdcCommandError):
-        d.app_start("com.example.mock")
+        d.aa_start("com.example.mock")
 
 
 # ---------------------------------------------------------------------

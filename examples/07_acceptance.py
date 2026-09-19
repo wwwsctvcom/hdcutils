@@ -105,7 +105,7 @@ def step11(hdc, ctx):
 
 
 def step12(hdc, ctx):
-    ctx["device"].keyevent("Back")
+    ctx["device"].key_event("Back")
     return "uitest uiInput keyEvent Back"
 
 
@@ -133,7 +133,7 @@ STEPS = [
     (9, "port forwarding (fport)", step9),
     (10, "screenshot", step10),
     (11, "window_size", step11),
-    (12, "input injection (keyevent)", step12),
+    (12, "input injection (uitest uiInput keyEvent)", step12),
     (13, "streamed hilog", step13),
 ]
 

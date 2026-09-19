@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""hdcutils -- a pure-python HarmonyOS hdc library (modeled after adbutils).
+"""hdcutils -- a pure-python HarmonyOS hdc library.
+
+The API is named after the official hdc / OpenHarmony tool commands
+(``hdc list targets``, ``hdc shell``, ``hdc file send``, ``hdc install``,
+``hdc fport``, ``aa``/``bm``/``param``, ``uitest uiInput``, ``power-shell``).
+No hdc.exe is involved in any device operation: commands go straight to the
+hdc server over a socket (one short connection per command).
 
 Quick start::
 
@@ -25,20 +31,29 @@ from .exceptions import (
     HdcDeviceNotFoundError,
 )
 from .core import HdcClient, TargetInfo
-from ._device import HdcDevice, DeviceInfo, KeyCode, WindowSize, AppCurrentInfo, Prop
+from ._device import (
+    HdcDevice,
+    DeviceInfo,
+    KeyCode,
+    WindowSize,
+    AppCurrentInfo,
+    SyncSession,
+    ForwardedSocket,
+)
 from ._connection import ShellSession
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "__version__",
     "HdcClient",
     "HdcDevice",
     "DeviceInfo",
-    "Prop",
     "KeyCode",
     "WindowSize",
     "AppCurrentInfo",
+    "SyncSession",
+    "ForwardedSocket",
     "TargetInfo",
     "ShellSession",
     "HdcError",

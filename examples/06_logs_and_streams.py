@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""06 - logs and streams: hilog/logcat, streaming shell, interactive shell.
+"""06 - logs and streams: hilog, track-jpid, streaming shell, interactive shell.
 
 Streaming APIs are the only explicit long connections in this library;
 close them when done to keep the device-side session (and its power cost)
@@ -14,7 +14,7 @@ import hdcutils
 hdc = hdcutils.HdcClient()
 d = hdc.device()
 
-# 1. Streamed hilog (alias: logcat). `timeout` bounds the whole capture.
+# 1. `hdc hilog`: streamed device logs. `timeout` bounds the whole capture.
 print("--- hilog (5s) ---")
 try:
     for line in d.hilog(timeout=5):
@@ -25,6 +25,11 @@ except hdcutils.HdcTimeoutError:
 # 2. Filtered hilog, same as the hdc CLI arguments.
 # for line in d.hilog("-T", "MyApp", timeout=5):
 #     print(line)
+
+# 3. `hdc track-jpid`: stream app pid/bundle changes.
+# for line in d.track_jpid("-a", timeout=5):
+#     print(line)
+# print("current jpids:", d.jpid())
 
 # 3. Streaming shell output (one short-lived connection per generator).
 print("--- stream_lines ---")

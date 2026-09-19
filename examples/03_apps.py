@@ -11,7 +11,7 @@ hdc = hdcutils.HdcClient()
 d = hdc.device()
 
 # 1. Installed packages.
-apps = d.list_packages()          # alias: list_apps()
+apps = d.list_apps()          # alias: list_apps()
 print("installed apps: %d, first five: %s" % (len(apps), apps[:5]))
 
 # 2. App details (bm dump -n) - dict when parseable JSON.
@@ -37,19 +37,19 @@ if len(sys.argv) > 1:
     result = d.install(hap)  # returns daemon echo; the bundle name comes from the app
     print("install again:", result)
 
-# 5. Start / stop / clear an app (aa/bm shell commands).
+# 5. Start / stop / clear an app (official aa/bm commands).
 if apps:
     bundle = apps[0]
     try:
-        d.app_start(bundle)
+        d.aa_start(bundle)
         print("app_start ok :", bundle)
-        d.app_stop(bundle)
+        d.aa_force_stop(bundle)
         print("app_stop  ok :", bundle)
     except hdcutils.HdcCommandError as exc:
         print("start/stop failed (system app?):", exc)
 
-# 6. Open a URL through the system route.
-# d.open_browser("https://developer.huawei.com/")
+# 6. Open a URL through the system route (official `aa start -U <url>`).
+# d.aa_start("com.example.browser", url="https://developer.huawei.com/")
 
 # 7. Uninstall (careful: this really removes the app).
 # d.uninstall("com.example.app", keep_data=False)

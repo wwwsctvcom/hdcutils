@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""01 - quick start: connect, enumerate devices, run shell, read properties.
+"""01 - quick start: connect, enumerate devices, run shell, read parameters.
 
 Run: python examples/01_quickstart.py
 """
@@ -40,8 +40,8 @@ print("device info   :", info)
 print("  model=%s brand=%s os=%s api=%s"
       % (info.model, info.brand, info.os_version, info.api_version))
 
-# 6. adbutils-style property accessor.
-print("prop accessor :", d.prop.get("const.product.model"), "/", d.prop["const.ohos.apiversion"])
+# 6. `param get` in raw form (param ls / set / wait / save are also available).
+print("param get     :", d.param_get("const.product.model").strip())
 
 # 7. Wait for a device to (re)appear, e.g. after reboot.
-# d.reboot(); d.wait_for_device(timeout=60)
+# d.target_boot(); d.wait(timeout=60)

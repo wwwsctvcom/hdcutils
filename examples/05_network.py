@@ -22,9 +22,9 @@ serial = d.serial
 
 # ------------------------------------------------------- switch to TCP mode
 # `tmode port <port>` restarts the daemon listening on TCP; the USB
-# connection drops afterwards. adbutils-style name: d.tcpip(port).
+# connection drops afterwards. adbutils-style name: d.tmode_port(port).
 PORT = 10123
-print("tmode         :", d.tcpip(PORT))
+print("tmode port    :", d.tmode_port(PORT))   # official `hdc tmode port`
 
 # ------------------------------------------------------------ WiFi connect
 ip = sys.argv[1] if len(sys.argv) > 1 else input("phone IP (e.g. 192.168.1.42): ").strip()
@@ -37,8 +37,9 @@ print("wifi shell    :", wifi_device.shell("param get const.product.model"))
 
 # ------------------------------------------------------------------ cleanup
 print("disconnect    :", hdc.disconnect(addr))
-# switch the daemon back to USB when needed:
-#   hdc.device(serial).shell("tmode usb")
+# switch the daemon back when needed:
+#   wifi_device.tmode_port_close()      # `hdc tmode port close`
+#   (tmode usb is deprecated since hdc 3.1.0e: use the device USB toggle)
 
 # ------------------------------------------------- port forwarding + tunnel
 # fport/rport map ports on this machine to the device (adbutils: forward/reverse).

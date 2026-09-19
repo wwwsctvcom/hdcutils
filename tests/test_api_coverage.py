@@ -76,18 +76,21 @@ def test_client_list_and_device_list(client):
     assert client.list_targets() == ["MOCKSERIAL1", "MOCKSERIAL2"]
     devices = client.device_list()
     assert [d.serial for d in devices] == ["MOCKSERIAL1", "MOCKSERIAL2"]
-    assert [d.serial for d in client.list()] == ["MOCKSERIAL1", "MOCKSERIAL2"]
+    assert not hasattr(client, "list")          # official name is list_targets
 
 
-def test_client_device_and_wait_for_aliases(client):
+def test_client_device_and_wait(client):
+    """``hdc wait`` is the official name (no wait_for_device alias)."""
     assert client.device("MOCKSERIAL1").serial == "MOCKSERIAL1"
-    assert client.wait_for(timeout=5).serial in ("MOCKSERIAL1", "MOCKSERIAL2")
-    assert client.wait_for("MOCKSERIAL2", timeout=5).serial == "MOCKSERIAL2"
+    assert client.wait(timeout=5).serial in ("MOCKSERIAL1", "MOCKSERIAL2")
+    assert client.wait("MOCKSERIAL2", timeout=5).serial == "MOCKSERIAL2"
+    assert not hasattr(client, "wait_for_device")
+    assert not hasattr(client, "wait_for")
 
 
 def test_client_wait_for_device_timeout(client):
     with pytest.raises(HdcTimeoutError):
-        client.wait_for_device("NOPE", timeout=1.0, poll_interval=0.2)
+        client.wait("NOPE", timeout=1.0, poll_interval=0.2)
 
 
 def test_client_stream_command(client, device):
@@ -144,7 +147,7 @@ def test_stream_shell_frames(device):
 
 def test_hilog_and_logcat(device):
     assert list(device.hilog(timeout=10))[-1] == "hilog line 2"
-    assert list(device.logcat(timeout=10))[0] == "hilog line 0"
+    assert list(device.hilog(timeout=10))[0] == "hilog line 0"
 
 
 def test_open_shell_session(device):
@@ -161,16 +164,20 @@ def test_open_shell_session(device):
 # =====================================================================
 # files
 # =====================================================================
-def test_send_recv_and_aliases(tmp_path, device):
+def test_send_recv_file(tmp_path, device):
+    """``hdc file send`` / ``hdc file recv`` and the sync namespace."""
     local = tmp_path / "a.bin"
     local.write_bytes(b"payload-123")
     device.send_file(str(local), "/data/local/tmp/a.bin")
     back = tmp_path / "back.bin"
     device.recv_file("/data/local/tmp/a.bin", str(back))
     assert back.read_bytes() == b"payload-123"
-    device.push(str(local), "/data/local/tmp/push.bin")
-    device.pull("/data/local/tmp/push.bin", str(tmp_path / "pull.bin"))
+
+    device.sync.push(str(local), "/data/local/tmp/push.bin")
+    device.sync.pull("/data/local/tmp/push.bin", str(tmp_path / "pull.bin"))
     assert (tmp_path / "pull.bin").read_bytes() == b"payload-123"
+    assert not hasattr(device, "push")          # use d.sync.push / send_file
+    assert not hasattr(device, "pull")
 
 
 def test_send_file_options(tmp_path, device):
@@ -203,7 +210,7 @@ def test_sync_namespace(tmp_path, device):
 # =====================================================================
 def test_list_apps_and_list_packages(device):
     assert device.list_apps() == ["com.example.mock", "com.example.other"]
-    assert device.list_packages() == device.list_apps()
+    assert device.list_apps() == device.list_apps()
 
 
 def test_app_info_and_version(device):
@@ -213,9 +220,9 @@ def test_app_info_and_version(device):
 
 
 def test_app_start_variants(device, captured):
-    device.app_start("com.example.mock")
-    device.app_start("com.example.mock", ability="EntryAbility")
-    device.app_start("com.example.mock", url="https://example.com")
+    device.aa_start("com.example.mock")
+    device.aa_start("com.example.mock", ability="EntryAbility")
+    device.aa_start("com.example.mock", url="https://example.com")
     assert "aa start -b com.example.mock" in captured[0]
     assert "aa start -b com.example.mock -a EntryAbility" in captured[1]
     assert "aa start -b com.example.mock -U https://example.com" in captured[2]
@@ -224,18 +231,20 @@ def test_app_start_variants(device, captured):
 def test_app_start_failure_raises(device, monkeypatch):
     monkeypatch.setattr(device, "shell", lambda *a, **k: "[Fail]Operation failed")
     with pytest.raises(HdcCommandError):
-        device.app_start("com.example.mock")
+        device.aa_start("com.example.mock")
 
 
-def test_open_browser_and_open_url(device, captured):
-    device.open_browser("https://example.com")
-    device.open_url("https://example.com")
-    assert captured == ["aa start -U https://example.com"] * 2
+def test_aa_start_with_url(device, captured):
+    """``aa start -U <url>`` is the official way to open a URL."""
+    device.aa_start("com.example.mock", url="https://example.com")
+    assert captured == ["aa start -b com.example.mock -U https://example.com"]
+    assert not hasattr(device, "open_browser")
+    assert not hasattr(device, "open_url")
 
 
 def test_app_stop_and_clear(device, captured):
-    device.app_stop("com.example.mock")
-    device.app_clear("com.example.mock")
+    device.aa_force_stop("com.example.mock")
+    device.bm_clean("com.example.mock")
     assert captured[0] == "aa force-stop com.example.mock"
     assert captured[1] == "bm clean -n com.example.mock -d"
 
@@ -270,19 +279,26 @@ def test_click_family(device, captured):
     ]
 
 
-def test_swipe_and_drag(device, captured):
+def test_swipe_drag_fling(device, captured):
+    """Official signatures: swipe/drag/fling all take [speed] (default 500)."""
     device.swipe(1, 2, 3, 4)
     device.swipe(1, 2, 3, 4, speed=600)
     device.drag(5, 6, 7, 8)
-    assert captured[0] == "uitest uiInput swipe 1 2 3 4"
-    assert captured[1] == "uitest uiInput swipe 1 2 3 4 600"
-    assert captured[2] == "uitest uiInput drag 5 6 7 8"
+    device.fling(1, 2, 3, 4)
+    device.dirc_fling(2, 600)
+    assert captured == [
+        "uitest uiInput swipe 1 2 3 4 500",
+        "uitest uiInput swipe 1 2 3 4 600",
+        "uitest uiInput drag 5 6 7 8 500",
+        "uitest uiInput fling 1 2 3 4 500",
+        "uitest uiInput dircFling 2 600",
+    ]
 
 
 def test_keyevent_int_name_and_keycode(device, captured):
-    device.keyevent(KeyCode.BACK)
-    device.keyevent("Home")
-    device.keyevent(2)
+    device.key_event(KeyCode.BACK)
+    device.key_event("Home")
+    device.key_event(2)
     assert captured == [
         "uitest uiInput keyEvent 2",
         "uitest uiInput keyEvent Home",
@@ -290,17 +306,14 @@ def test_keyevent_int_name_and_keycode(device, captured):
     ]
 
 
-def test_send_keys_and_input_text(device, monkeypatch, captured):
-    # without coordinates: taps the screen center first (window_size = 100x50)
-    device.send_keys("hello")
-    device.input_text("world", 10, 20)
-    uitest = [c for c in captured if c.startswith("uitest")]
-    assert uitest == [
-        "uitest uiInput click 50 25",               # send_keys taps the center first
-        "uitest uiInput inputText 50 25 hello",
-        "uitest uiInput inputText 10 20 world",      # explicit coordinates: no tap
+def test_text_and_input_text(device, captured):
+    """Official shapes: ``inputText <x> <y> <text>`` and ``text <content>``."""
+    device.input_text(10, 20, "world")
+    device.text("hello")
+    assert captured == [
+        "uitest uiInput inputText 10 20 world",
+        "uitest uiInput text hello",
     ]
-    assert any(c.startswith("snapshot_display") for c in captured)  # center from window_size
 
 
 def test_volume_keys(device, captured):
@@ -327,13 +340,60 @@ def test_screen_on_off_and_state(device, captured):
 def test_unlock_sequence(device, captured):
     device.unlock()
     assert captured[0] == "power-shell wakeup"
-    assert captured[1].startswith("snapshot_display")   # window_size -> screenshot
-    assert captured[-1] == "uitest uiInput swipe 50 40 50 10"  # 100x50 screen
+    assert captured[1].startswith("snapshot_display")          # window_size
+    assert captured[-1] == "uitest uiInput swipe 50 40 50 10 500"  # 100x50 screen
 
 
-def test_root_and_tcpip(device):
-    assert "root run mode" in device.root()
-    assert "Tmode" in device.tcpip(10123)
+def test_smode_and_tmode(device):
+    """Official names only: ``hdc smode`` / ``hdc tmode port``."""
+    assert "root run mode" in device.smode()
+    assert "Tmode" in device.tmode_port(10123)
+    assert "close success" in device.tmode_port_close()
+    assert not hasattr(device, "root")
+    assert not hasattr(device, "tcpip")
+
+
+def test_official_command_name_aliases(device, monkeypatch):
+    """Every official-name alias must issue the official hdc command."""
+    sent = []
+    original = device._execute
+
+    def spy(command, **kwargs):
+        sent.append(command)
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(device, "_execute", spy)
+    device.target_boot("recovery")
+    device.smode()
+    device.tmode_port(10123)
+    device.tmode_port_close()
+    device.jpid()
+    assert sent == [
+        "target boot recovery",
+        "smode",
+        "tmode port 10123",
+        "tmode port close",
+        "jpid",
+    ]
+
+
+def test_bare_reboot_is_not_used(device):
+    """The official server rejects a bare `reboot`; make sure we never send it."""
+    sent = []
+    original = device._execute
+    device._execute = lambda command, **kw: (sent.append(command), original(command, **kw))[1]
+    try:
+        device.target_boot()
+        assert sent == ["target boot"]
+        assert "reboot" not in [c for c in sent if c == "reboot"]
+    finally:
+        device._execute = original
+
+
+def test_jpid_and_track_jpid(device):
+    assert "com.example.mock" in device.jpid()
+    lines = list(device.track_jpid(timeout=5))
+    assert len(lines) == 2 and "com.example.mock" in lines[0]
 
 
 def test_battery(device):
@@ -343,6 +403,8 @@ def test_battery(device):
 
 
 def test_reboot_modes(device, monkeypatch):
+    """Official command name is ``target boot`` (a bare ``reboot`` is rejected
+    by the real server -- verified against the official hdc binary)."""
     commands = []
     original = device._execute
 
@@ -351,29 +413,32 @@ def test_reboot_modes(device, monkeypatch):
         return original(command, **kwargs)
 
     monkeypatch.setattr(device, "_execute", spy)
-    device.reboot()
-    device.reboot("recovery")
-    assert commands == ["reboot", "reboot recovery"]
+    device.target_boot()
+    device.target_boot("recovery")
+    device.target_boot("bootloader")
+    assert commands == ["target boot", "target boot recovery", "target boot bootloader"]
 
 
-def test_device_info_and_props(device):
+def test_device_info_and_param(device):
+    """``param get`` in parsed and raw forms; ``param ls/set/wait/save``."""
     info = device.device_info()
     assert isinstance(info, DeviceInfo)
     assert info.model == "HUAWEI Mock Phone"
     props = device.get_props()
     assert props["const.ohos.apiversion"] == "12"
-    assert device.prop.get("const.product.model") == "HUAWEI Mock Phone"
-    assert device.prop["const.product.model"] == "HUAWEI Mock Phone"
-    assert device.prop("const.product.model") == "HUAWEI Mock Phone"
+    assert device.get_prop("const.product.model") == "HUAWEI Mock Phone"
+    assert "const.product.model" in device.param_get("const.product.model")
+    assert isinstance(device.param_ls("const.product"), list)
+    device.param_set("persist.test", "1")
+    assert device.param_wait("persist.test", "1", timeout=2) is True
+    device.param_save()
+    assert not hasattr(device, "prop")
 
 
-def test_wait_for_device_specific(device):
-    assert device.wait_for_device(timeout=5).serial in ("MOCKSERIAL1", "MOCKSERIAL2")
+def test_wait_specific_device(device):
+    assert device.wait(timeout=5).serial in ("MOCKSERIAL1", "MOCKSERIAL2")
 
 
-# =====================================================================
-# screenshot
-# =====================================================================
 def test_screenshot_data_and_file(tmp_path, device):
     data = device.screenshot_data()
     assert data == FAKE_JPEG
@@ -392,15 +457,15 @@ def test_window_size(device):
 # port forwarding + tunnels
 # =====================================================================
 def test_forward_aliases(device):
-    device.forward("tcp:17170", "tcp:8012")
+    device.fport("tcp:17170", "tcp:8012")
     assert "tcp:17170 tcp:8012" in device.fport_list()
-    assert device.fport_list() == device.forward_list()
-    device.forward_remove("tcp:17170 tcp:8012")
+    assert device.fport_list() == device.fport_list()
+    device.fport_remove("tcp:17170 tcp:8012")
     device.fport_remove_all()
 
 
 def test_reverse_alias(device):
-    device.reverse("tcp:8012", "tcp:17171")
+    device.rport("tcp:8012", "tcp:17171")
 
 
 def test_create_connection_tunnel(device):
