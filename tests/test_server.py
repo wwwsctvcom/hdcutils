@@ -9,8 +9,9 @@ import time
 import pytest
 
 import hdcutils
+import hdcutils._server as server_mod
 from hdcutils._server import (
-    ensure_server, find_hdc_binary, find_server_pid, kill_server, probe_server,
+    ensure_server, find_server_pid, kill_server, probe_server,
     server_pid_file, start_server,
 )
 
@@ -102,6 +103,10 @@ def test_kill_server_via_pid_file(monkeypatch, tmp_path):
         monkeypatch.setattr(hdcutils._server, "_pid_listening_on", lambda port: None)
         (tmp_path / ".HDCServer.pid").write_text(str(proc.pid))
         kill_server(port=12345, timeout=5)
+        # poll() reaps asynchronously on Windows: give it a moment
+        deadline = time.monotonic() + 3
+        while proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
         assert proc.poll() is not None  # the process is gone
     finally:
         if proc.poll() is None:
@@ -145,8 +150,8 @@ def test_ensure_server_no_binary():
 
 
 def test_find_hdc_binary_explicit(spawner_hdc):
-    assert find_hdc_binary(spawner_hdc) == spawner_hdc
-    assert find_hdc_binary("/no/such/hdc") is None
+    assert server_mod.find_hdc_binary(spawner_hdc) == spawner_hdc
+    assert server_mod.find_hdc_binary("/no/such/hdc") is None
 
 
 @pytest.fixture()

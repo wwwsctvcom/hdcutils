@@ -73,6 +73,8 @@ class MockHdcServer:
         self.device_files: dict = {}  # emulated device file system
         self.installed_packages: list = []
         self.uninstalled: list = []
+        self.forward_rules: dict = {}  # "tcp:7000 tcp:8012" -> listener socket
+        self.reverse_rules: dict = {}
         self._channel_seq = 0
         self._sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
@@ -94,8 +96,59 @@ class MockHdcServer:
                 self._sock.close()
             except OSError:
                 pass
+        for rule in list(self.forward_rules):
+            listener = self.forward_rules.pop(rule, None)
+            if listener is not None:
+                try:
+                    listener.close()
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------------
+    def _start_forward_listener(self, local_node: str, remote_node: str) -> None:
+        """Emulate port forwarding: listen on the local node and answer with a
+        fixed banner so create_connection() has something to talk to."""
+        rule = "%s %s" % (local_node, remote_node)
+        if rule in self.forward_rules:
+            return
+        port = int(local_node.split(":")[1])
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            listener.bind(("127.0.0.1", port))
+        except OSError:
+            listener.close()  # port taken: behave like a failed forward request
+            return
+        listener.listen(4)
+        self.forward_rules[rule] = listener
+
+        def serve():
+            while rule in self.forward_rules:
+                try:
+                    client, _ = listener.accept()
+                except OSError:
+                    return
+                try:
+                    client.sendall(b"mock-forward " + remote_node.encode() + b"\r\n")
+                except OSError:
+                    pass
+                finally:
+                    try:
+                        client.close()
+                    except OSError:
+                        pass
+
+        threading.Thread(target=serve, daemon=True).start()
+
+    def _stop_forward_listener(self, local_node: str, remote_node: str) -> None:
+        rule = "%s %s" % (local_node, remote_node)
+        listener = self.forward_rules.pop(rule, None)
+        if listener is not None:
+            try:
+                listener.close()
+            except OSError:
+                pass
+
     def _serve(self) -> None:
         while not self.stop_event.is_set():
             try:
@@ -110,8 +163,8 @@ class MockHdcServer:
                 self._channel_seq += 1
                 channel_id = self._channel_seq
             self._send_handshake(conn, channel_id)
-            reply = self._recv_exact(conn, SERVER_HANDSHAKE_MIN)
-            if reply[:8] != b"OHOS HDC":
+            reply = self._read_frame(conn)  # client reply is length-framed
+            if reply is None or reply[:8] != b"OHOS HDC":
                 conn.close()
                 return
             connect_key = reply[12:44].split(b"\x00", 1)[0].decode("utf-8", "replace") or "any"
@@ -144,11 +197,11 @@ class MockHdcServer:
             pass
 
     def _send_handshake(self, conn: socket.socket, channel_id: int) -> None:
-        banner = b"OHOS HDC\x00\x00KH"  # banner[10]='K',banner[11]='H'
-        data = banner + struct.pack(">I", channel_id) + b"\x00" * 28
+        banner = b"OHOS HDC\x00\x00KH"  # banner[10]='K', banner[11]='H'
+        payload = banner + struct.pack(">I", channel_id) + b"\x00" * 28
         if self.use_version_handshake:
-            data += VERSION + b"\x00" * (64 - len(VERSION))
-        conn.sendall(data)
+            payload += VERSION + b"\x00" * (64 - len(VERSION))
+        conn.sendall(struct.pack(">I", len(payload)) + payload)  # length-framed
 
     @staticmethod
     def _recv_exact(conn: socket.socket, n: int) -> bytes:
@@ -216,13 +269,21 @@ class MockHdcServer:
                 conn.sendall(self._frame(b"Connect OK\r\n"))
             return True
         if command == "fport ls":
-            conn.sendall(self._frame(b"tcp:7000 tcp:8012\r\n"))
+            rules = list(self.forward_rules)
+            conn.sendall(self._frame((("\r\n".join(rules) if rules else "(empty)") + "\r\n").encode()))
             return True
-        if command.startswith("fport"):
+        if command.startswith(("fport", "rport")):
+            reverse = command.startswith("rport")
             parts = command.split()
             if len(parts) == 3:
-                conn.sendall(self._frame(b"Forward set success\r\n"))
+                if reverse:
+                    self.reverse_rules[parts[1]] = parts[2]
+                    conn.sendall(self._frame(b"Reverse forward set success\r\n"))
+                else:
+                    self._start_forward_listener(parts[1], parts[2])
+                    conn.sendall(self._frame(b"Forward set success\r\n"))
             elif len(parts) == 4 and parts[1] == "rm":
+                self._stop_forward_listener(parts[2], parts[3])
                 conn.sendall(self._frame(b"Remove forward success\r\n"))
             else:
                 conn.sendall(self._frame(b"[Fail]Invalid fport rule\r\n"))
@@ -233,6 +294,13 @@ class MockHdcServer:
                 time.sleep(0.02)
             return False
         if command == "reboot":
+            return False
+        if command == "smode" or command.startswith("smode "):
+            conn.sendall(self._frame(b"Set root run mode success\r\n"))
+            return False
+        if command.startswith("tmode"):
+            reply = "Tmode %s success\r\n" % command[len("tmode"):].strip()
+            conn.sendall(self._frame(reply.encode()))
             return False
         conn.sendall(self._frame(("[Fail]Unknown command: %s\r\n" % command).encode()))
         return False
@@ -450,6 +518,14 @@ class MockHdcServer:
             return ""
         if cmd.startswith("aa start"):
             return "start ability successfully.\r\n"
+        if cmd.startswith("echo ") and " | base64 -d > " in cmd:
+            # write_file: "echo <b64> | base64 -d > /path"
+            encoded, _, target = cmd[len("echo "):].partition(" | base64 -d > ")
+            try:
+                self.device_files[target.strip()] = base64.b64decode(encoded.strip())
+            except Exception:
+                return "base64: invalid input\r\n"
+            return ""
         if cmd.startswith("echo "):
             return cmd[len("echo "):] + "\r\n"
         if cmd == "hilog" or cmd.startswith("hilog "):

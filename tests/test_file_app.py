@@ -125,8 +125,8 @@ def test_read_file_missing(mock_port):
 def test_write_file(mock_port):
     client = hdcutils.HdcClient(port=mock_port, auto_start=False)
     d = client.device("MOCKSERIAL1")
-    d.write_file("/data/local/tmp/w.txt", b"payload")  # echo relay, mock echoes
-    assert "base64 -d" in d.shell("echo a | base64 -d > /data/local/tmp/w.txt")
+    d.write_file("/data/local/tmp/w.txt", b"payload")  # base64 relay
+    assert d.read_file("/data/local/tmp/w.txt") == b"payload"
 
 
 # ---------------------------------------------------------------------

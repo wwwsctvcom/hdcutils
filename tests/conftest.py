@@ -12,12 +12,9 @@ def block_hdc_search(monkeypatch):
     keep tests from triggering the real CLI."""
 
     def fake_find(explicit=None):
-        if explicit and os.path.isfile(explicit):
-            return explicit
-        env = os.environ.get("HDCUTILS_HDC_PATH")
-        if env and os.path.isfile(env):
-            return env
-        return None
+        # Hermetic tests: honor only explicit paths, never the host PATH or
+        # HDCUTILS_HDC_PATH (a real hdc may be installed on this machine).
+        return explicit if (explicit and os.path.isfile(explicit)) else None
 
     for name in ("hdcutils.core", "hdcutils._server"):
         module = importlib.import_module(name)

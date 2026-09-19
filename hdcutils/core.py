@@ -72,7 +72,14 @@ class TargetInfo:
 
     @property
     def is_connected(self) -> bool:
-        return self.state.lower() in ("connected", "ready")
+        """Only ``Connected`` counts as usable.
+
+        The official ``list targets -v`` also reports UART/COM probe entries
+        and unauthorized devices as ``Ready`` -- those are not usable targets
+        (device()/wait_for_device must ignore them; the official
+        non-verbose list excludes them too).
+        """
+        return self.state.lower() == "connected"
 
     def __str__(self) -> str:
         line = "%s %s %s" % (self.connect_key, self.type, self.state)
@@ -363,13 +370,15 @@ def _parse_list_targets(raw: bytes, verbose: bool) -> List:
         return lines
     targets = []
     for line in lines:
+        # Official output is tab-separated: key, type, state, addr, "hdc"
+        # e.g. "SERIAL  USB  Connected  <sn>  hdc" / "COM3  UART  Ready  unknown..."
         parts = line.split()
         if not parts:
             continue
         key = parts[0]
         if len(parts) >= 3:
             ttype = parts[1]
-            addr = " ".join(parts[3:])
+            addr = parts[3] if len(parts) >= 4 else ""
             if parts[2].lower() in ("connected", "offline", "ready", "disconnected"):
                 state = parts[2]
             else:

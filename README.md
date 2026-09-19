@@ -410,28 +410,67 @@ interactive shell (`shell` with no arguments) enters
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v
+pytest tests/ -v          # 243 tests, no device and no hdc.exe required
 ```
 
 `tests/_mock.py` implements a **mock hdc server + emulated daemon** strictly
 following the protocol above, covering:
 
-- both 44/108-byte handshake variants;
+- both 44/108-byte handshake variants (handshakes are length-framed, matching
+  real servers);
 - daemon/local command lifetimes, interactive shell, u16-prefixed frames;
 - the **full file/app task protocol** (TransferConfig/TransferPayload
   protobuf encode/decode reuses the library's own implementation -- an
   implicit consistency check): single-file send/recv, directories,
   install, uninstall;
 - the PID-file kill path and auto-pullup (a fake hdc launches a real mock
-  server process).
+  server process);
+- **per-API coverage** (`tests/test_api_coverage.py`): every public method of
+  `HdcClient` / `HdcDevice` / `HdcSync` / `Prop` is exercised -- shell family,
+  files, apps, input (asserting the exact `uitest uiInput` command shapes),
+  screen/power, fport/tunnels, exceptions and aliases.
 
-No real device and no hdc.exe are needed to run the suite.
+### Validated against real hdc servers
+
+The library has been verified against two independent real hdc
+implementations: the **official OpenHarmony 6.1 release toolchain hdc.exe**
+(sha256-verified SDK) and [muka_rust_hdc](https://github.com/Attect/muka_rust_hdc).
+That validation uncovered and fixed two wire-level details that mocks alone
+could not:
+
+1. the client/server handshake is **length-framed in both directions**
+   (`[4B BE length][44 or 108-byte handshake]`);
+2. `list targets -v` reports UART/COM probe entries and unauthorized devices
+   as `Ready` -- only `Connected` is a usable target, so
+   `device()`/`wait_for_device()` ignore `Ready` entries.
+
+## Examples
+
+Runnable examples live in [`examples/`](examples/):
+
+```bash
+python examples/01_quickstart.py        # connect, enumerate, shell, props
+python examples/02_files.py             # send/recv/read/write, sync namespace, dirs
+python examples/03_apps.py              # install/uninstall/list/info/start/stop
+python examples/04_input_screen.py      # screenshot, window size, tap/swipe/keys
+python examples/05_network.py           # USB -> WiFi (tmode/tconn), forwarding, tunnels
+python examples/06_logs_and_streams.py  # hilog/logcat, streaming and interactive shell
+python examples/07_acceptance.py        # 13-step real-device acceptance run
+```
+
 
 ## Real device / emulator validation plan
 
 Protocol mocks cannot cover real device-side behavior, so validate against a
-**real server + device** in this order:
+**real server + device**. The server side is already validated (see the
+testing section: official OpenHarmony 6.1 hdc toolchain + muka_rust_hdc), so
+what remains is the device side. In order of preference:
 
+0. **Already on this machine** (see `D:\HarmonyOS\README.md`): the official
+   `hdc.exe` from the sha256-verified OpenHarmony 6.1 SDK is deployed with
+   `HDCUTILS_HDC_PATH`/PATH set, the USB driver pack is at
+   `D:\HarmonyOS\usb-driver`, and `python examples/07_acceptance.py` runs the
+   13-step check against whatever device is attached;
 1. **First choice: the official DevEco Studio emulator** (no real phone needed):
    1. Install DevEco Studio -> Device Manager -> create an API 12+
       (HarmonyOS NEXT) emulator and start it;

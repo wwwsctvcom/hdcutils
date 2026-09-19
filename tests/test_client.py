@@ -177,6 +177,8 @@ def test_fport_roundtrip(client):
 
 def test_fport_list(client):
     d = client.device("MOCKSERIAL1")
+    assert d.fport_list() == []          # no rules yet ("(empty)" filtered)
+    d.fport("tcp:7000", "tcp:8012")
     assert d.fport_list() == ["tcp:7000 tcp:8012"]
 
 
@@ -234,9 +236,8 @@ def test_read_file(client):
 
 def test_write_file(client):
     d = client.device("MOCKSERIAL1")
-    encoded = base64.b64encode(b"payload-123").decode()
-    out = d.shell("echo %s | base64 -d > /data/x.txt" % encoded)
-    assert "base64 -d" in out
+    d.write_file("/data/local/tmp/w.txt", b"payload-123")
+    assert d.read_file("/data/local/tmp/w.txt") == b"payload-123"
 
 
 def test_read_file_missing(client):

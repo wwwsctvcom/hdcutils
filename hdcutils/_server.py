@@ -78,6 +78,28 @@ def server_pid_file() -> str:
 
 
 def _pid_alive(pid: int) -> bool:
+    """Check whether a PID exists, WITHOUT killing it.
+
+    NOTE: ``os.kill(pid, 0)`` must NOT be used on Windows -- there it invokes
+    TerminateProcess and actually kills the target. Use OpenProcess +
+    GetExitCodeProcess on Windows, os.kill(0) on POSIX.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False  # no such process (or no permission)
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True
@@ -98,16 +120,27 @@ def find_server_pid(port: int) -> Optional[int]:
     return _pid_listening_on(port)
 
 
+def _decode_output(raw: bytes) -> str:
+    """Decode console output tolerantly: netstat on zh-CN Windows is GBK."""
+    for encoding in ("utf-8", "gbk"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 def _pid_listening_on(port: int) -> Optional[int]:
     """Look up a PID by listening port (Windows: netstat -ano; POSIX: ss/lsof/proc)."""
     if os.name == "nt":
         try:
-            out = subprocess.run(
-                ["netstat", "-ano"], capture_output=True, text=True,
-                timeout=10, creationflags=CREATE_NO_WINDOW
-            ).stdout or ""
+            raw = subprocess.run(
+                ["netstat", "-ano"], capture_output=True,
+                timeout=15, creationflags=CREATE_NO_WINDOW
+            ).stdout or b""
         except (OSError, subprocess.SubprocessError):
             return None
+        out = _decode_output(raw)
         for line in out.splitlines():
             parts = line.split()
             if len(parts) >= 5 and parts[1].endswith(":%d" % port) and parts[3] == "LISTENING":
@@ -161,15 +194,17 @@ def start_server(hdc_path: str, port: int, timeout: float = 15.0) -> None:
 
     Injects ``OHOS_HDC_SERVER_PORT``/``HDC_SERVER_PORT`` into the child env to
     pin the port. This is the **only** use of the hdc binary: launching the
-    server process itself.
+    server process itself. The child's stdio goes to DEVNULL -- capturing
+    pipes would hang forever when a pulled-up server inherits the handles.
     """
     env = dict(os.environ)
     env["OHOS_HDC_SERVER_PORT"] = str(port)
     env["HDC_SERVER_PORT"] = str(port)
     subprocess.run(
         [hdc_path, "list targets"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
         timeout=timeout,
         env=env,
         creationflags=CREATE_NO_WINDOW,

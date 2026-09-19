@@ -98,12 +98,14 @@ class HdcChannel:
 
     # ---- lifecycle -------------------------------------------------
     def open(self, connect_key: str = "any") -> None:
-        """Establish the TCP connection and complete the handshake (the
-        official client's 44-byte reply).
+        """Establish the TCP connection and complete the handshake.
 
-        Note: servers compiled with version checking (e.g. DevEco's bundled
-        hdc) send a 108-byte handshake (44 + 64 bytes of version text); the
-        extra bytes must be drained or they would be misread as a frame.
+        The handshake travels length-framed in BOTH directions (verified
+        against a real hdc server and ``HdcChannelBase::Send`` ->
+        ``SendChannel``): ``[4B BE length][44 or 108 byte handshake]``.
+        Servers compiled with version checking (e.g. DevEco's hdc) use the
+        108-byte payload; the length prefix makes both variants trivial to
+        read. The client reply is framed as well: ``[4B BE 44][handshake]``.
         """
         try:
             sock = socket.create_connection((self.host, self.port), timeout=self.connect_timeout)
@@ -114,12 +116,13 @@ class HdcChannel:
         self._sock = sock
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            data = self._recv_exact(SERVER_HANDSHAKE_MIN)
-            extra = self._drain_handshake_extra(sock)
-            if extra:
-                data += extra
-            self.channel_id, self.server_version = parse_server_handshake(data)
-            sock.sendall(build_client_handshake(connect_key))
+            payload, framed = self._read_server_handshake(sock)
+            self.channel_id, self.server_version = parse_server_handshake(payload)
+            reply = build_client_handshake(connect_key)
+            if framed:
+                sock.sendall(encode_frame(reply))  # SendChannel-style framing
+            else:
+                sock.sendall(reply)  # legacy raw variant
         except Exception:
             sock.close()
             self._sock = None
@@ -139,27 +142,16 @@ class HdcChannel:
             buf += chunk
         return buf
 
-    def _drain_handshake_extra(self, sock: socket.socket) -> bytes:
-        """Drain the extra 64-byte version section of 108-byte handshakes
-        (absent on servers without version checking)."""
-        try:
-            sock.settimeout(self.handshake_drain_timeout)
-            sock.recv(1, socket.MSG_PEEK)
-        except socket.timeout:
-            return b""  # nothing extra: 44-byte handshake
-        except OSError as exc:
-            raise HdcServerError("handshake peek failed: %s" % exc) from exc
-        buf = b""
-        while len(buf) < SERVER_HANDSHAKE_FULL - SERVER_HANDSHAKE_MIN:
-            try:
-                sock.settimeout(self.connect_timeout)
-                chunk = sock.recv(SERVER_HANDSHAKE_FULL - SERVER_HANDSHAKE_MIN - len(buf))
-            except socket.timeout:
-                break  # a partial version segment is harmless; treat as 44
-            if not chunk:
-                break
-            buf += chunk
-        return buf
+    def _read_server_handshake(self, sock: socket.socket):
+        """Read the server handshake. Modern servers frame it
+        (``[4B BE 44|108][payload]``); fall back to the legacy raw 44-byte
+        layout when the first four bytes are not a plausible length."""
+        first4 = self._recv_exact(4)
+        size = int.from_bytes(first4, "big")
+        if size in (SERVER_HANDSHAKE_MIN, SERVER_HANDSHAKE_FULL):
+            return self._recv_exact(size), True
+        payload = first4 + self._recv_exact(SERVER_HANDSHAKE_MIN - 4)
+        return payload, False
 
     def close(self) -> None:
         sock, self._sock, self._reader = self._sock, None, None
