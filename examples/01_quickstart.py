@@ -30,9 +30,13 @@ print("device        :", d)
 print("model         :", d.shell("param get const.product.model"))
 print("api version   :", d.get_prop("const.ohos.apiversion"))
 
-# hdc does not report exit codes; shell2 adds the `echo __RC__$?` trick.
-out, code = d.shell2("echo hello")
-print("shell2        :", repr(out), "rc =", code)
+# hdc does not report exit codes; shell_ex adds the `echo __RC__$?` trick.
+out, code = d.shell_ex("echo hello")
+print("shell_ex      :", repr(out), "rc =", code)
+
+# shell() is the single entry point (like the official framework's
+# driver.shell). stream_shell()/open_shell() exist only for output that does
+# not end by itself, and for state that must persist between commands.
 
 # 5. Structured device info.
 info = d.device_info()

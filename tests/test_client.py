@@ -117,9 +117,9 @@ def test_device_info(client):
     assert info.api_version == "12"
 
 
-def test_shell2_returncode(client):
+def test_shell_ex_returncode(client):
     d = client.device("MOCKSERIAL1")
-    out, rc = d.shell2("echo hello")
+    out, rc = d.shell_ex("echo hello")
     assert out == "hello"
     assert rc == 0
 
@@ -140,10 +140,10 @@ def test_hilog_stream(client):
     assert lines == ["hilog line 0", "hilog line 1", "hilog line 2"]
 
 
-def test_stream_lines(client):
+def test_stream_shell_frames(client):
     d = client.device("MOCKSERIAL1")
-    lines = list(d.stream_lines("hilog", timeout=10))
-    assert len(lines) == 3
+    frames = list(d.stream_shell("hilog", timeout=10))
+    assert len(frames) == 3
 
 
 def test_shell_sleep_no_output(client):

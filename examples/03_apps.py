@@ -37,7 +37,9 @@ if len(sys.argv) > 1:
     result = d.install(hap)  # returns daemon echo; the bundle name comes from the app
     print("install again:", result)
 
-# 5. Start / stop / clear an app (official aa/bm commands).
+# 5. Start / stop / clear an app (official aa/bm commands). The official test
+#    framework's spellings work too: start_app / stop_app / has_app /
+#    clear_app_data / install_app / uninstall_app.
 if apps:
     bundle = apps[0]
     try:

@@ -203,13 +203,17 @@ Named after the official hdc commands.
 
 **Shell -- `hdc shell`**
 
-| Method | Official command |
+One entry point, exactly like the official test framework's `driver.shell`.
+The two extras exist only for cases the single API cannot express, and each
+says so in its docstring:
+
+| Method | When to use it |
 |---|---|
-| `shell(cmd, stream=False)` | `hdc shell <cmd>` |
-| `shell_bytes(cmd)` | `hdc shell <cmd>` (raw bytes) |
-| `shell2(cmd)` | `hdc shell <cmd>` + return code |
-| `open_shell()` | `hdc shell` (interactive terminal) |
-| `stream_shell(cmd)` / `stream_lines(cmd)` | `hdc shell` (streamed) |
+| `shell(cmd, timeout=None)` | **Use this.** One command, text output (also accepts a list) |
+| `shell_bytes(cmd)` | Same, when the output is binary |
+| `shell_ex(cmd)` | Same, when you need the exit code (`; echo __RC__$?`) |
+| `stream_shell(cmd)` | Only for output that does not end by itself (`top`, log tail) |
+| `open_shell()` | Only when state must persist between commands (`cd`, exports) |
 
 **Device operations -- `hdc hilog` / `jpid` / `track-jpid` / `target boot` / `bugreport`**
 
@@ -454,6 +458,33 @@ Method names follow the command names, including the hdc-specific ones
 `bm_*`, `aa_*`). Where a command has subcommands, the method carries the
 subcommand as a prefix (`aa_start`, `bm_clean`, `param_set`), which is how
 the official docs group them.
+
+### Names borrowed from the official test framework (hypium)
+
+The official UI-test framework (`pip install hypium`, Huawei's PyPI mirror)
+is a `subprocess` wrapper around the hdc CLI, so its naming is worth reusing
+where it names the same operation. hdcutils provides those spellings as
+thin aliases over the official commands:
+
+| hypium `driver.*` | hdcutils | Underlying official command |
+|---|---|---|
+| `shell(cmd, timeout)` | `shell(cmd, timeout)` | `hdc shell <cmd>` |
+| `hdc(cmd, timeout)` | `hdcutils` is the hdc layer itself | - |
+| `push_file(local, device)` | `push_file` (= `send_file`) | `hdc file send` |
+| `pull_file(device, local=None)` | `pull_file` (= `recv_file`) | `hdc file recv` |
+| `has_file(path)` | `has_file` | `hdc shell test -e` |
+| `install_app(path)` / `uninstall_app(bundle)` | `install_app` / `uninstall_app` | `hdc install` / `hdc uninstall` |
+| `start_app(bundle, ability)` / `stop_app(bundle)` | `start_app` / `stop_app` | `aa start` / `aa force-stop` |
+| `has_app(bundle)` / `clear_app_data(bundle)` | `has_app` / `clear_app_data` | `bm dump -a` / `bm clean -d` |
+| `current_app()` -> `(bundle, ability)` | `current_app()` | `hidumper -s AbilityManagerService` |
+| `wake_up_display()` / `close_display()` | `wake_up_display` / `close_display` | `power-shell wakeup` / `suspend` |
+| `wait(seconds)` | `time.sleep` (host-side; not device state) | - |
+
+What was deliberately **not** borrowed: hypium's UI-automation surface
+(`UiDriver`, `By` selectors, `Component`, `xpath`, `checker` assertions,
+`DriverConfig`, popup handlers, `deveco_testing` reporting). This library is
+the low-level hdc layer -- the same role adbutils plays for adb -- and stops
+at device operations.
 
 Two deliberate consequences:
 

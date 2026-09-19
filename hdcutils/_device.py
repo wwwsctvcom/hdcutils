@@ -185,28 +185,23 @@ class HdcDevice:
     # ==================================================================
     # Shell -- `hdc shell`
     # ==================================================================
-    def shell(self, cmd, stream: bool = False, timeout: Optional[float] = None,
-              encoding: str = "utf-8"):
-        """``hdc shell <cmd>``: run a command on the device.
+    def shell(self, cmd, timeout: Optional[float] = None,
+              encoding: str = "utf-8") -> str:
+        """``hdc shell <cmd>``: run one command on the device.
 
-        ``cmd`` accepts a str or a list (joined with spaces; pass a str when
-        quoting matters). hdc does not propagate exit codes -- use
-        :meth:`shell2` when the return code matters. With ``stream=True`` a
-        generator of raw output chunks is returned instead (explicit long
-        connection; close it when done).
+        This is *the* way to run commands -- the same single entry point the
+        official test framework (hypium) exposes. ``cmd`` accepts a str or a
+        list (joined with spaces; pass a str when quoting matters).
+
+        Note: hdc does not report exit codes. Use :meth:`shell_ex` if you need
+        one, or :meth:`stream_shell` / :meth:`open_shell` for long-running and
+        interactive cases.
         """
-        if isinstance(cmd, (list, tuple)):
-            cmd = " ".join(str(c) for c in cmd)
-        cmd = str(cmd)
-        if cmd.startswith("shell "):
-            cmd = cmd[len("shell "):]
-        if stream:
-            return self.stream_shell(cmd, timeout=timeout)
         return self.shell_bytes(cmd, timeout=timeout).decode(
             encoding, "replace").rstrip("\r\n")
 
     def shell_bytes(self, cmd, timeout: Optional[float] = None) -> bytes:
-        """``hdc shell <cmd>``, returning raw bytes."""
+        """``hdc shell <cmd>`` returning raw bytes (for binary output)."""
         if isinstance(cmd, (list, tuple)):
             cmd = " ".join(str(c) for c in cmd)
         cmd = str(cmd)
@@ -215,11 +210,11 @@ class HdcDevice:
         return self._execute("shell " + cmd, completion="stream",
                              check_fail=False, timeout=timeout)
 
-    def shell2(self, cmd, timeout: Optional[float] = None) -> Tuple[str, int]:
-        """``hdc shell`` plus a return code: ``(output, returncode)``.
+    def shell_ex(self, cmd, timeout: Optional[float] = None) -> Tuple[str, int]:
+        """``hdc shell <cmd>`` with an exit code: ``(output, returncode)``.
 
-        hdc does not report exit codes, so ``; echo __RC__$?`` is appended;
-        this works for virtually all commands.
+        hdc has no exit-code channel, so ``; echo __RC__$?`` is appended to
+        the command; this works for virtually all commands.
         """
         if isinstance(cmd, (list, tuple)):
             cmd = " ".join(str(c) for c in cmd)
@@ -229,15 +224,29 @@ class HdcDevice:
             return text[: match.start()].rstrip("\r\n"), int(match.group(1))
         return text, -1
 
-    def open_shell(self, initial: Optional[str] = None) -> "ShellSession":
-        """``hdc shell`` with no command: interactive device terminal.
+    def stream_shell(self, cmd, timeout: Optional[float] = None) -> Iterator[bytes]:
+        """``hdc shell <cmd>`` for long-running output (raw chunks).
 
-        This is an explicit long connection; close it when done.
+        Use this only when the output does not end on its own (a log tail, a
+        ``top`` loop). It is an explicit long connection: consume or close the
+        generator when done. For ordinary commands use :meth:`shell`.
+        """
+        if isinstance(cmd, (list, tuple)):
+            cmd = " ".join(str(c) for c in cmd)
+        return self.client.stream_command("shell " + str(cmd), serial=self.serial,
+                                          timeout=timeout)
+
+    def open_shell(self, initial: Optional[str] = None) -> "ShellSession":
+        """``hdc shell`` with no command: an interactive device terminal.
+
+        Use this only when you need state to persist between commands (``cd``,
+        exported variables). It is an explicit long connection; close it when
+        done. For one-shot commands use :meth:`shell`.
 
         Usage::
 
             with d.open_shell() as sh:
-                sh.send("ps -ef")
+                sh.send("cd /data/local/tmp && ls")
                 print(sh.recv(timeout=2))
         """
         self.client._ensure()
@@ -246,25 +255,6 @@ class HdcDevice:
         if initial:
             session.send(initial)
         return session
-
-    def stream_shell(self, cmd, timeout: Optional[float] = None) -> Iterator[bytes]:
-        """``hdc shell`` with streaming output (raw chunks)."""
-        if isinstance(cmd, (list, tuple)):
-            cmd = " ".join(str(c) for c in cmd)
-        return self.client.stream_command("shell " + str(cmd), serial=self.serial,
-                                          timeout=timeout)
-
-    def stream_lines(self, cmd, timeout: Optional[float] = None,
-                     encoding: str = "utf-8") -> Iterator[str]:
-        """``hdc shell`` with streaming output, line by line."""
-        buf = b""
-        for chunk in self.stream_shell(cmd, timeout=timeout):
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                yield line.rstrip(b"\r").decode(encoding, "replace")
-        if buf.strip():
-            yield buf.rstrip(b"\r").decode(encoding, "replace")
 
     # ==================================================================
     # Device operations -- `hdc hilog` / `hdc jpid` / `hdc track-jpid` /
@@ -361,6 +351,36 @@ class HdcDevice:
     def recv_file(self, remote: str, local: str, timeout: float = 300.0) -> str:
         """``hdc file recv DEST SOURCE`` (device -> local)."""
         return self._file_task().recv_file(remote, local, timeout=timeout)
+
+    def push_file(self, local_path: str, device_path: str,
+                  timeout: float = 300.0) -> str:
+        """Local -> device file transfer.
+
+        Same operation as :meth:`send_file`; this spelling matches the
+        official test framework's ``driver.push_file``.
+        """
+        return self.send_file(local_path, device_path, timeout=timeout)
+
+    def pull_file(self, device_path: str, local_path: str = None,
+                  timeout: float = 300.0) -> str:
+        """Device -> local file transfer.
+
+        Same operation as :meth:`recv_file`; this spelling matches the
+        official test framework's ``driver.pull_file``. When ``local_path`` is
+        omitted the device file's basename is used in the current directory.
+        """
+        if local_path is None:
+            local_path = os.path.basename(device_path.rstrip("/")) or "pulled_file"
+        return self.recv_file(device_path, local_path, timeout=timeout)
+
+    def has_file(self, file_path: str, timeout: float = 15.0) -> bool:
+        """Whether a path exists on the device.
+
+        Matches the official test framework's ``driver.has_file``; implemented
+        with a plain ``hdc shell`` test command.
+        """
+        out = self.shell("test -e %s && echo __YES__" % file_path, timeout=timeout)
+        return "__YES__" in out
 
     def send_dir(self, local_dir: str, remote_dir: str, timeout: float = 600.0) -> int:
         """Push a directory recursively (single-file sends + ``mkdir``).
@@ -514,10 +534,56 @@ class HdcDevice:
         """``aa force-stop <bundle>``: force-stop an app."""
         self.shell(["aa", "force-stop", bundle_name], timeout=timeout)
 
+    def start_app(self, bundle_name: str, ability_name: Optional[str] = None,
+                  params: str = "", timeout: float = 30.0) -> None:
+        """Start an app -- the official test framework's ``driver.start_app``.
+
+        Equivalent to :meth:`aa_start` (``aa start -b <bundle> -a <ability>``);
+        ``params`` are appended to the command line.
+        """
+        self.aa_start(bundle_name, ability=ability_name, timeout=timeout)
+        if params:
+            self.shell(["aa", "start", "-b", bundle_name,
+                        "-a", ability_name or "", params], timeout=timeout)
+
+    def stop_app(self, bundle_name: str, timeout: float = 30.0) -> None:
+        """Stop an app -- the official test framework's ``driver.stop_app``."""
+        self.aa_force_stop(bundle_name, timeout=timeout)
+
+    def has_app(self, bundle_name: str, timeout: float = 30.0) -> bool:
+        """Whether an app is installed (``bm dump -a`` lookup)."""
+        try:
+            return bundle_name in self.list_apps(timeout=timeout)
+        except HdcCommandError:
+            return False
+
+    def clear_app_data(self, bundle_name: str, timeout: float = 60.0) -> None:
+        """Clear app data -- the official test framework's ``driver.clear_app_data``."""
+        self.bm_clean(bundle_name, "-d", timeout=timeout)
+
+    def install_app(self, package_path: str, options: str = "",
+                    timeout: float = 600.0) -> str:
+        """Install a package -- the official test framework's ``driver.install_app``."""
+        return self.install(package_path, *(options.split() or ["-r"]),
+                            timeout=timeout)
+
+    def uninstall_app(self, bundle_name: str, timeout: float = 300.0) -> str:
+        """Uninstall an app -- the official test framework's ``driver.uninstall_app``."""
+        return self.uninstall(bundle_name, timeout=timeout)
+
     def aa_dump(self, *args: str, timeout: float = 30.0) -> str:
         """``aa dump`` (deprecated in the official docs; kept for completeness)."""
         parts = ["aa", "dump"] + [str(a) for a in args]
         return self.shell(parts, timeout=timeout)
+
+    def current_app(self, timeout: float = 15.0) -> Tuple[str, str]:
+        """Foreground app as ``(bundle_name, ability_name)``.
+
+        Matches the official test framework's ``driver.current_app``; use
+        :meth:`app_current` when you prefer the named fields.
+        """
+        info = self.app_current(timeout=timeout)
+        return info.bundle_name, info.ability_name
 
     def app_current(self, timeout: float = 15.0) -> AppCurrentInfo:
         """Foreground app, from ``hidumper -s AbilityManagerService``."""
@@ -826,6 +892,14 @@ class HdcDevice:
     def screen_on(self, timeout: float = 15.0) -> None:
         """``power-shell wakeup``: turn the screen on."""
         self.power_shell("wakeup", timeout=timeout)
+
+    def wake_up_display(self, timeout: float = 15.0) -> None:
+        """Turn the screen on -- the official test framework's spelling."""
+        self.screen_on(timeout=timeout)
+
+    def close_display(self, timeout: float = 15.0) -> None:
+        """Turn the screen off -- the official test framework's spelling."""
+        self.screen_off(timeout=timeout)
 
     def screen_off(self, timeout: float = 15.0) -> None:
         """``power-shell suspend``: turn the screen off."""

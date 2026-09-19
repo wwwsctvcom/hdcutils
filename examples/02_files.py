@@ -32,12 +32,17 @@ print("read_file     : %d bytes" % len(data))
 d.write_file("/data/local/tmp/hdcutils_small.txt", b"hello from hdcutils\n")
 print("write_file    :", d.read_file("/data/local/tmp/hdcutils_small.txt"))
 
-# 4. adbutils-style sync namespace.
+# 4. Official test-framework spellings for the same transfers.
+d.push_file(local_file, "/data/local/tmp/hdcutils_push.bin")
+d.pull_file("/data/local/tmp/hdcutils_push.bin", os.path.join(workdir, "push_back.bin"))
+print("has_file      :", d.has_file("/data/local/tmp/hdcutils_push.bin"))
+
+# 5. sync namespace.
 d.sync.push(local_file, "/data/local/tmp/hdcutils_sync.bin")
 print("sync.read_text:", "peer ok" if d.sync.read_bytes(REMOTE) == data else "MISMATCH")
 d.sync.pull("/data/local/tmp/hdcutils_sync.bin", os.path.join(workdir, "sync_back.bin"))
 
-# 5. Directory transfer (composed per-file + mkdir; no binary dir-mode protocol).
+# 6. Directory transfer (composed per-file + mkdir; no binary dir-mode protocol).
 local_dir = os.path.join(workdir, "tree")
 os.makedirs(os.path.join(local_dir, "sub"), exist_ok=True)
 open(os.path.join(local_dir, "a.txt"), "w").write("A")
@@ -48,7 +53,7 @@ out_dir = os.path.join(workdir, "tree_back")
 count = d.pull_dir("/data/local/tmp/hdcutils_tree", out_dir)
 print("pull_dir      : %d files" % count)
 
-# 6. Cleanup.
+# 7. Cleanup.
 d.shell("rm -rf /data/local/tmp/hdcutils_example.bin /data/local/tmp/hdcutils_sync.bin "
         "/data/local/tmp/hdcutils_small.txt /data/local/tmp/hdcutils_tree")
 print("cleaned up; local artifacts in", workdir)

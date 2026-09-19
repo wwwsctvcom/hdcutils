@@ -4,6 +4,11 @@
 The API is named after the official hdc / OpenHarmony tool commands
 (``hdc list targets``, ``hdc shell``, ``hdc file send``, ``hdc install``,
 ``hdc fport``, ``aa``/``bm``/``param``, ``uitest uiInput``, ``power-shell``).
+Names used by the official test framework (hypium) for the same operations
+are also provided -- ``push_file``/``pull_file``/``has_file``,
+``start_app``/``stop_app``/``has_app``/``clear_app_data``, ``current_app``,
+``wake_up_display``/``close_display`` -- so either vocabulary works.
+
 No hdc.exe is involved in any device operation: commands go straight to the
 hdc server over a socket (one short connection per command).
 

@@ -533,6 +533,11 @@ class MockHdcServer:
                 self.device_files[parts[1]] = b"[base] MockReport" + r.encode()
                 return ""
             return "[base] MockReport" + r + n
+        if cmd.startswith("test -e "):
+            path = cmd[len("test -e "):].split("&&")[0].strip()
+            if self._fake_exists(path):
+                return "__YES__\r\n"
+            return ""
         if cmd.startswith("test -f "):
             path = cmd[len("test -f "):].split("&&")[0].strip()
             if self._fake_exists(path):

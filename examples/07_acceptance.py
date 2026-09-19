@@ -49,7 +49,7 @@ def step3(hdc, ctx):
 
 
 def step4(hdc, ctx):
-    out, code = ctx["device"].shell2("echo hello")
+    out, code = ctx["device"].shell_ex("echo hello")
     assert code == 0, "rc=%s out=%r" % (code, out)
     return "rc=0 out=%r" % out
 

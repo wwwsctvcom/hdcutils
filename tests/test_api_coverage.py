@@ -52,7 +52,8 @@ def captured(device, monkeypatch):
     original = device.shell_bytes
 
     def spy(cmd, timeout=None):
-        calls.append(cmd)
+        # normalize list-form commands to the command text actually sent
+        calls.append(" ".join(str(c) for c in cmd) if isinstance(cmd, (list, tuple)) else cmd)
         return original(cmd, timeout=timeout)
 
     monkeypatch.setattr(device, "shell_bytes", spy)
@@ -129,15 +130,17 @@ def test_shell_str_and_list(device):
 
 def test_shell_bytes_and_shell2(device):
     assert device.shell_bytes("echo raw") == b"raw\r\n"
-    out, rc = device.shell2("echo hi")
+    out, rc = device.shell_ex("echo hi")
     assert (out, rc) == ("hi", 0)
 
 
-def test_shell_stream_and_stream_lines(device):
-    chunks = list(device.shell("echo streamed", stream=True, timeout=10))
+def test_stream_shell(device):
+    """stream_shell is the only streaming entry (long connection)."""
+    chunks = list(device.stream_shell("echo streamed", timeout=10))
     assert b"".join(chunks).strip() == b"streamed"
-    lines = list(device.stream_lines("hilog", timeout=10))
-    assert lines == ["hilog line 0", "hilog line 1", "hilog line 2"]
+    frames = list(device.stream_shell("hilog", timeout=10))
+    assert len(frames) == 3
+    assert not hasattr(device, "stream_lines")    # split lines yourself
 
 
 def test_stream_shell_frames(device):
@@ -388,6 +391,32 @@ def test_bare_reboot_is_not_used(device):
         assert "reboot" not in [c for c in sent if c == "reboot"]
     finally:
         device._execute = original
+
+
+def test_official_framework_style_names(device, tmp_path):
+    """Names used by the official test framework (hypium) for the same ops.
+
+    Verified against hypium's driver API: push_file/pull_file/has_file,
+    start_app/stop_app/has_app/clear_app_data, current_app,
+    wake_up_display/close_display. They must issue the official hdc commands.
+    """
+    local = tmp_path / "f.bin"
+    local.write_bytes(b"x")
+    device.push_file(str(local), "/data/local/tmp/f.bin")
+    device.pull_file("/data/local/tmp/f.bin", str(tmp_path / "back.bin"))
+    assert (tmp_path / "back.bin").read_bytes() == b"x"
+    assert device.has_file("/data/local/tmp/f.bin") is True
+
+    assert device.has_app("com.example.mock") is True
+    assert device.has_app("no.such.app") is False
+    device.start_app("com.example.mock")
+    device.stop_app("com.example.mock")
+    device.clear_app_data("com.example.mock")
+    assert device.current_app() == ("com.example.mock", "EntryAbility")
+
+    device.wake_up_display()
+    device.close_display()
+    assert not hasattr(device, "prop")   # no adb-style leftovers
 
 
 def test_jpid_and_track_jpid(device):
