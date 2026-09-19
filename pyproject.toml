@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hdcutils"
+version = "0.1.0"
+description = "Pure-python HarmonyOS hdc library (adbutils-style)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "hdcutils contributors" }]
+requires-python = ">=3.8"
+keywords = ["harmonyos", "ohos", "hdc", "adbutils", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.optional-dependencies]
+pillow = ["Pillow>=8.0"]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/openharmony/developtools_hdc"
+
+[project.scripts]
+hdcutils = "hdcutils.cli:main"
+
+[tool.setuptools]
+packages = ["hdcutils"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
